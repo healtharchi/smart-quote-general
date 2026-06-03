@@ -16,27 +16,29 @@
 
   <main class="max-w-2xl mx-auto px-5 py-8">
     <h1 class="text-2xl font-bold mb-2">スマート見積（汎用版）の使い方</h1>
-    <p class="text-base text-slate-600 mb-8">白紙から自由に見積を作れる、リフォーム・修繕・解体など何にでも使える見積ツールです。よく使う内訳は「テンプレート」に登録して、いつでもワンタッチで呼び出せます。</p>
+    <p class="text-base text-slate-600 mb-8">物件（案件）を登録し、その中で見積を作り、確定したら請求書まで発行できる見積ツールです。リフォーム・修繕・解体など何にでも使え、よく使う内訳は「テンプレート」に登録してワンタッチで呼び出せます。</p>
 
     <section class="mb-8">
       <h2 class="text-lg font-bold border-l-4 border-[#F08300] pl-2 mb-3">このツールでできること</h2>
       <ul class="list-disc pl-6 space-y-1">
+        <li>物件（お客様・現場）ごとに見積を管理（1つの物件に複数の見積もOK）</li>
         <li>白紙から見積を作成（金額は「数量×単価」で自動計算）</li>
         <li>よく使う内訳セットを「テンプレート」に登録し、ワンタッチで呼び出し</li>
-        <li>見積書を3つの様式（シンプル／内訳付き／正式・押印欄付き）で印刷・PDF保存</li>
-        <li>会社情報・印鑑を登録して見積書に自動表示</li>
+        <li>見積を「確定」→ そのまま<strong>請求書を発行</strong>（振込先も自動表示）</li>
+        <li>見積書3様式・請求書を印刷・PDF保存／会社情報・印鑑を自動表示</li>
         <li>データのバックアップ（保存）・読み込み</li>
       </ul>
     </section>
 
     <section class="mb-8">
-      <h2 class="text-lg font-bold border-l-4 border-[#F08300] pl-2 mb-3">使い方（かんたん5ステップ）</h2>
+      <h2 class="text-lg font-bold border-l-4 border-[#F08300] pl-2 mb-3">使い方（かんたん6ステップ）</h2>
       <ol class="space-y-4">
-        <li class="bg-white border-2 border-slate-200 rounded p-4"><span class="font-bold text-[#C85400]">STEP 1</span><br>はじめに「⚙️ 設定」で会社名・住所・電話などを登録します（最初の1回だけ）。印鑑画像も入れておくと正式見積書に押印が入ります。</li>
-        <li class="bg-white border-2 border-slate-200 rounded p-4"><span class="font-bold text-[#C85400]">STEP 2</span><br>「📁 見積一覧」→「＋ 新しい見積を作る」を押し、「① 基本情報」で工事名・施主名などを入力します。</li>
-        <li class="bg-white border-2 border-slate-200 rounded p-4"><span class="font-bold text-[#C85400]">STEP 3</span><br>「② 内訳明細」で「📋 テンプレートを読み込む」を選ぶか、「＋ カテゴリを追加」で分類を作り、項目・数量・単価を入力します。金額は自動で計算されます。</li>
-        <li class="bg-white border-2 border-slate-200 rounded p-4"><span class="font-bold text-[#C85400]">STEP 4</span><br>よく使う内訳になったら「この内訳をテンプレート保存」で登録。次回から「📋 テンプレート」で呼び出せます。</li>
-        <li class="bg-white border-2 border-slate-200 rounded p-4"><span class="font-bold text-[#C85400]">STEP 5</span><br>「③ 見積書プレビュー」で様式を選び、「🖨 印刷 / PDF保存」を押します。印刷画面で「PDFとして保存」を選べばPDFになります。</li>
+        <li class="bg-white border-2 border-slate-200 rounded p-4"><span class="font-bold text-[#C85400]">STEP 1</span><br>はじめに「⚙️ 設定」で会社名・住所・電話・<strong>振込先（銀行口座）</strong>を登録します（最初の1回だけ）。印鑑画像も入れておくと見積書・請求書に押印が入ります。</li>
+        <li class="bg-white border-2 border-slate-200 rounded p-4"><span class="font-bold text-[#C85400]">STEP 2</span><br>「📁 物件一覧」→「＋ 物件を登録する」で物件（お客様・現場）を作り、お客様名・工事場所を入力します。</li>
+        <li class="bg-white border-2 border-slate-200 rounded p-4"><span class="font-bold text-[#C85400]">STEP 3</span><br>物件の画面で「＋ 見積を作る」を押し、「① 基本情報」で見積名・工事種別などを入力します。</li>
+        <li class="bg-white border-2 border-slate-200 rounded p-4"><span class="font-bold text-[#C85400]">STEP 4</span><br>「② 内訳明細」で「📋 テンプレートを読み込む」を選ぶか「＋ カテゴリを追加」で分類を作り、項目・数量・単価を入力します。金額は自動計算。「③ 見積書プレビュー」で印刷・PDF保存できます。</li>
+        <li class="bg-white border-2 border-slate-200 rounded p-4"><span class="font-bold text-[#C85400]">STEP 5</span><br>内容が固まったら上の「✓ この見積を確定する」を押します（確定中は編集ロック／「確定解除」で戻せます）。</li>
+        <li class="bg-white border-2 border-slate-200 rounded p-4"><span class="font-bold text-[#C85400]">STEP 6</span><br>確定すると「🧾 請求書を作成」が出ます。押すと請求書ができ、請求日・支払期限・備考を整えて「🖨 印刷 / PDF保存」で発行できます。</li>
       </ol>
     </section>
 
@@ -44,6 +46,8 @@
       <h2 class="text-lg font-bold border-l-4 border-[#F08300] pl-2 mb-3">うまくいかない時は</h2>
       <ul class="list-disc pl-6 space-y-1">
         <li>金額が出ない → 「使う」のチェックが入っているか、数量と単価の両方が入っているかご確認ください。</li>
+        <li>お客様名・工事場所が見積書に出ない → 「物件」画面の物件情報に入力すると、その物件の見積書・請求書へ自動反映されます。</li>
+        <li>請求書を作れない → まず見積を「確定」してください（確定後に作成ボタンが出ます）。</li>
         <li>テンプレートを呼び出すと、今の明細の「後ろ」に追加されます（上書きはしません）。</li>
         <li>入力したデータはこの端末のブラウザ内にのみ保存されます（外部には送信されません）。機種変更・共有・保管のときは「⚙️ 設定」の「全データを保存（バックアップ）」をご利用ください。</li>
       </ul>

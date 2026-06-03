@@ -20,7 +20,6 @@
   body { font-family: 'Noto Sans JP','Hiragino Sans','Yu Gothic UI','Meiryo',sans-serif; font-size:18px; line-height:1.6; color:#1B2B4B; background:#F8FAFC; }
   .num { font-feature-settings: "tnum"; font-variant-numeric: tabular-nums; }
   input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-  /* 印刷スタイル */
   @media print {
     body { background: white; font-size: 11pt; }
     .no-print { display: none !important; }
@@ -37,12 +36,11 @@
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, createContext, useContext } = React;
-const LS_KEY = "ha_general_quote_v1";
+const LS_KEY = "ha_general_quote_v2";
+const LS_KEY_V1 = "ha_general_quote_v1";
 
-// よく使う単位（候補・キーボード入力を減らす）
 const UNIT_OPTIONS = ["式","㎡","m","m²","本","枚","箇所","台","個","面","帖","坪","ヶ月","日","人工","kg","㎥","セット","回","部屋","ヶ所"];
 
-// ============ 練習用サンプルテンプレート（編集・削除OK） ============
 const SAMPLE_TEMPLATE_SOURCE = [
   { name: "仮設・養生工事", items: [
     { name: "仮設足場", unit: "㎡" }, { name: "養生・防塵シート", unit: "式" },
@@ -69,65 +67,40 @@ const SAMPLE_TEMPLATE_SOURCE = [
 // ============ ユーティリティ ============
 function uuid() { return 'id-' + Math.random().toString(36).slice(2, 10) + '-' + Date.now().toString(36); }
 function nowISO() { return new Date().toISOString(); }
-function fmt(n) {
-  if (n === null || n === undefined || isNaN(n)) return "—";
-  return Math.round(n).toLocaleString('ja-JP');
-}
+function fmt(n) { if (n === null || n === undefined || isNaN(n)) return "—"; return Math.round(n).toLocaleString('ja-JP'); }
 function fmtDate(iso) { return iso ? iso.slice(0, 10) : ""; }
 function todayISO() { return new Date().toISOString().slice(0, 10); }
-function cleanClientName(name) {
-  if (!name) return '';
-  return String(name).replace(/[\s　]*(様|さま|サマ|殿|御中)$/, '').trim();
-}
-function codeFromNumber(n) {
-  let s = '';
-  while (n > 0) { n--; s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26); }
-  return s;
-}
+function cleanClientName(name) { if (!name) return ''; return String(name).replace(/[\s　]*(様|さま|サマ|殿|御中)$/, '').trim(); }
+function codeFromNumber(n) { let s = ''; while (n > 0) { n--; s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26); } return s; }
 function nextAvailableCategoryCode(usedCodes) {
   const used = new Set((usedCodes || []).map(c => String(c).toUpperCase()));
   for (let i = 1; i < 10000; i++) { const code = codeFromNumber(i); if (!used.has(code)) return code; }
   return 'X' + Date.now().toString(36).toUpperCase();
 }
-
-function makeSampleTemplate() {
-  return {
-    id: uuid(), name: 'リフォーム標準（サンプル）',
-    categories: SAMPLE_TEMPLATE_SOURCE.map(c => ({
-      name: c.name, items: c.items.map(it => ({ name: it.name, spec: '', unit: it.unit || '式', price: '' }))
-    })),
-    createdAt: nowISO(), updatedAt: nowISO(),
-  };
+function nextInvoiceNo(invoices) {
+  const ymd = todayISO().replace(/-/g, '');
+  const seq = (invoices || []).filter(iv => (iv.invoiceNo || '').startsWith(ymd)).length + 1;
+  return `${ymd}-${String(seq).padStart(2, '0')}`;
 }
-
-// テンプレートの内容を見積の明細行へ（既存行の後ろに追加。数量は空欄、単価はテンプレ値を引き継ぐ）
+function makeSampleTemplate() {
+  return { id: uuid(), name: 'リフォーム標準（サンプル）',
+    categories: SAMPLE_TEMPLATE_SOURCE.map(c => ({ name: c.name, items: c.items.map(it => ({ name: it.name, spec: '', unit: it.unit || '式', price: '' })) })),
+    createdAt: nowISO(), updatedAt: nowISO() };
+}
 function applyTemplateToLines(existingLines, template) {
   const used = new Set((existingLines || []).map(l => l.group));
   const added = [];
   (template.categories || []).forEach(cat => {
     const group = nextAvailableCategoryCode([...used]); used.add(group);
-    (cat.items || []).forEach(it => {
-      added.push({
-        id: uuid(), group, categoryName: cat.name,
-        name: it.name || '', spec: it.spec || '',
-        quantity: '', unit: it.unit || '式', price: (it.price ?? ''),
-        enabled: true,
-      });
-    });
+    (cat.items || []).forEach(it => { added.push({ id: uuid(), group, categoryName: cat.name, name: it.name || '', spec: it.spec || '', quantity: '', unit: it.unit || '式', price: (it.price ?? ''), enabled: true }); });
   });
   return [...(existingLines || []), ...added];
 }
-
 function linesToTemplateCategories(lines) {
-  return groupLines(lines).map(g => ({
-    name: g.categoryName,
-    items: g.items.map(it => ({ name: it.name, spec: it.spec, unit: it.unit, price: it.price }))
-  }));
+  return groupLines(lines).map(g => ({ name: g.categoryName, items: g.items.map(it => ({ name: it.name, spec: it.spec, unit: it.unit, price: it.price })) }));
 }
-
-// ============ 計算（金額＝数量×単価のみ・自動計算式なし） ============
-function computeEstimate(project) {
-  const lines = (project.lines || []).map(l => {
+function computeEstimate(est) {
+  const lines = (est.lines || []).map(l => {
     const qty = (l.quantity === '' || l.quantity == null) ? null : (parseFloat(l.quantity) || 0);
     const price = (l.price === '' || l.price == null) ? null : (parseFloat(l.price) || 0);
     const hasValue = qty != null && price != null;
@@ -135,75 +108,66 @@ function computeEstimate(project) {
     return { ...l, qtyNum: qty, priceNum: price, amount };
   });
   const counters = {};
-  lines.forEach(l => {
-    if (!l.enabled) { l.displayNo = ''; return; }
-    counters[l.group] = (counters[l.group] || 0) + 1;
-    l.displayNo = `${l.group}-${counters[l.group]}`;
-  });
+  lines.forEach(l => { if (!l.enabled) { l.displayNo = ''; return; } counters[l.group] = (counters[l.group] || 0) + 1; l.displayNo = `${l.group}-${counters[l.group]}`; });
   const subtotal = lines.reduce((s, l) => s + l.amount, 0);
-  const taxRate = project.taxRate != null ? project.taxRate : 10;
+  const taxRate = est.taxRate != null ? est.taxRate : 10;
   const tax = Math.round(subtotal * taxRate / 100);
-  const total = subtotal + tax;
-  return { lines, subtotal, taxRate, tax, total };
+  return { lines, subtotal, taxRate, tax, total: subtotal + tax };
 }
-
 function groupLines(lines) {
   const order = []; const map = {};
   (lines || []).forEach(l => {
     if (!map[l.group]) { map[l.group] = { group: l.group, categoryName: l.categoryName, total: 0, items: [] }; order.push(l.group); }
-    map[l.group].categoryName = l.categoryName;
-    map[l.group].items.push(l);
+    map[l.group].categoryName = l.categoryName; map[l.group].items.push(l);
     if (typeof l.amount === 'number') map[l.group].total += l.amount;
   });
   return order.map(g => map[g]);
 }
+function emptyCompany() { return { name: '', address: '', phone: '', email: '', representative: '', stampImage: '', bankName: '', bankBranch: '', accountType: '普通', accountNumber: '', accountHolder: '' }; }
 
-// ============ Storage ============
+// ============ Storage（v2＋v1移行） ============
+function migrateV1() {
+  try {
+    const raw = localStorage.getItem(LS_KEY_V1); if (!raw) return null;
+    const old = JSON.parse(raw);
+    const properties = []; const estimates = [];
+    (old.projects || []).forEach(p => {
+      const prop = { id: uuid(), name: p.name || cleanClientName(p.clientName) || '無題の物件', clientName: p.clientName || '', siteAddress: p.siteAddress || '', memo: '', createdAt: p.createdAt || nowISO(), updatedAt: nowISO() };
+      properties.push(prop);
+      estimates.push({ id: uuid(), propertyId: prop.id, name: p.name || '見積', workType: p.workType || '', staffName: p.staffName || '', estimateDate: p.estimateDate || todayISO(), validUntil: p.validUntil || '', memo: p.memo || '', taxRate: p.taxRate != null ? p.taxRate : 10, printFormat: p.printFormat || 'standard', status: 'draft', confirmedAt: null, lines: p.lines || [], createdAt: p.createdAt || nowISO(), updatedAt: nowISO() });
+    });
+    return { properties, estimates, invoices: [], templates: old.templates || [makeSampleTemplate()], companyInfo: { ...emptyCompany(), ...(old.companyInfo || {}) } };
+  } catch (e) { return null; }
+}
 function loadAll() {
   try {
     const raw = localStorage.getItem(LS_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw);
-      if (!parsed.projects) parsed.projects = [];
-      if (!parsed.templates) parsed.templates = [makeSampleTemplate()];
-      if (!parsed.companyInfo) parsed.companyInfo = { name: '', address: '', phone: '', email: '', representative: '', stampImage: '' };
-      return parsed;
+      const p = JSON.parse(raw);
+      p.properties = p.properties || []; p.estimates = p.estimates || []; p.invoices = p.invoices || [];
+      p.templates = p.templates || [makeSampleTemplate()]; p.companyInfo = { ...emptyCompany(), ...(p.companyInfo || {}) };
+      return p;
     }
+    const migrated = migrateV1();
+    if (migrated) return migrated;
   } catch (e) {}
-  return { projects: [], templates: [makeSampleTemplate()], companyInfo: { name: '', address: '', phone: '', email: '', representative: '', stampImage: '' } };
+  return { properties: [], estimates: [], invoices: [], templates: [makeSampleTemplate()], companyInfo: emptyCompany() };
 }
 function saveAll(state) { try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) { console.error(e); } }
-
-function defaultProject() {
-  return {
-    id: uuid(), name: '', workType: '',
-    clientName: '', siteAddress: '', staffName: '',
-    estimateDate: todayISO(), validUntil: '', memo: '', taxRate: 10, printFormat: 'standard',
-    createdAt: nowISO(), updatedAt: nowISO(),
-    lines: [],   // ← 完全に白紙でスタート
-  };
-}
-
 function downloadJson(obj, filename) {
   const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename; a.click();
-  URL.revokeObjectURL(url);
+  const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = filename; a.click(); URL.revokeObjectURL(url);
 }
 
-// ============ モーダル（確認／入力）プロミス方式・confirm/prompt を置換 ============
+// ============ モーダル ============
 const UI = createContext(null);
 function useUI() { return useContext(UI); }
-
 function ModalProvider({ children }) {
   const [modal, setModal] = useState(null);
   const [field, setField] = useState('');
-
   const confirmAsk = (opts) => new Promise(res => setModal({ kind: 'confirm', resolve: res, ...opts }));
   const promptAsk = (opts) => new Promise(res => { setField(opts.defaultValue || ''); setModal({ kind: 'prompt', resolve: res, ...opts }); });
   const close = (val) => { if (modal) modal.resolve(val); setModal(null); };
-
   return (
     <UI.Provider value={{ confirm: confirmAsk, prompt: promptAsk }}>
       {children}
@@ -219,18 +183,11 @@ function ModalProvider({ children }) {
                 className="w-full px-3 py-2.5 border-2 border-slate-300 rounded-lg text-[17px] focus:outline-none focus:border-navy mb-5" />
             )}
             <div className="flex gap-3 justify-end">
-              <button onClick={() => close(modal.kind === 'confirm' ? false : null)}
-                className="bg-white border-2 border-navy text-navy font-bold px-5 rounded-lg hover:bg-slate-50" style={{ minHeight: '48px' }}>キャンセル</button>
+              <button onClick={() => close(modal.kind === 'confirm' ? false : null)} className="bg-white border-2 border-navy text-navy font-bold px-5 rounded-lg hover:bg-slate-50" style={{ minHeight: '48px' }}>キャンセル</button>
               {modal.kind === 'confirm' ? (
-                <button onClick={() => close(true)}
-                  className={`${modal.danger ? 'bg-danger hover:bg-red-800' : 'bg-cta hover:bg-ctad'} text-white font-bold px-5 rounded-lg`} style={{ minHeight: '48px' }}>
-                  {modal.confirmLabel || 'OK'}
-                </button>
+                <button onClick={() => close(true)} className={`${modal.danger ? 'bg-danger hover:bg-red-800' : 'bg-cta hover:bg-ctad'} text-white font-bold px-5 rounded-lg`} style={{ minHeight: '48px' }}>{modal.confirmLabel || 'OK'}</button>
               ) : (
-                <button onClick={() => { if (field.trim()) close(field.trim()); }}
-                  className="bg-cta hover:bg-ctad text-white font-bold px-5 rounded-lg" style={{ minHeight: '48px' }}>
-                  {modal.confirmLabel || '決定'}
-                </button>
+                <button onClick={() => { if (field.trim()) close(field.trim()); }} className="bg-cta hover:bg-ctad text-white font-bold px-5 rounded-lg" style={{ minHeight: '48px' }}>{modal.confirmLabel || '決定'}</button>
               )}
             </div>
           </div>
@@ -241,22 +198,14 @@ function ModalProvider({ children }) {
 }
 
 // ============ 共通パーツ ============
-const inputCls = "mt-1 w-full px-3 py-2.5 border-2 border-slate-300 rounded-lg text-[17px] bg-white focus:outline-none focus:border-navy focus:ring-2 focus:ring-navy/20";
-const cellInputCls = "w-full px-2 py-2 rounded-lg border border-slate-200 text-[16px] hover:bg-slate-50 focus:bg-white focus:border-navy focus:outline-none";
-
+const inputCls = "mt-1 w-full px-3 py-2.5 border-2 border-slate-300 rounded-lg text-[17px] bg-white focus:outline-none focus:border-navy focus:ring-2 focus:ring-navy/20 disabled:bg-slate-100 disabled:text-slate-500";
+const cellInputCls = "w-full px-2 py-2 rounded-lg border border-slate-200 text-[16px] hover:bg-slate-50 focus:bg-white focus:border-navy focus:outline-none disabled:bg-transparent disabled:border-transparent disabled:hover:bg-transparent";
 function Field({ label, children, hint }) {
-  return (
-    <label className="block">
-      <span className="text-[15px] font-bold text-navy">{label}</span>
-      {children}
-      {hint && <span className="block text-[13px] text-slate-500 mt-0.5">{hint}</span>}
-    </label>
-  );
+  return (<label className="block"><span className="text-[15px] font-bold text-navy">{label}</span>{children}{hint && <span className="block text-[13px] text-slate-500 mt-0.5">{hint}</span>}</label>);
 }
-
 function Header({ view, setView }) {
-  const navs = [['list', '📁 見積一覧'], ['templates', '📋 テンプレート'], ['settings', '⚙️ 設定']];
-  const activeName = (view.name === 'edit') ? 'list' : (view.name === 'template-edit') ? 'templates' : view.name;
+  const navs = [['properties', '📁 物件一覧'], ['templates', '📋 テンプレート'], ['settings', '⚙️ 設定']];
+  const active = ['property', 'estimate', 'invoice'].includes(view.name) ? 'properties' : (view.name === 'template-edit' ? 'templates' : view.name);
   return (
     <header className="bg-navy text-white shadow-md no-print sticky top-0 z-30">
       <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-2 flex-wrap">
@@ -267,14 +216,10 @@ function Header({ view, setView }) {
         <div className="flex gap-1.5 items-center flex-wrap">
           <nav className="flex gap-1">
             {navs.map(([id, label]) => (
-              <button key={id} onClick={() => setView({ name: id })}
-                className={`px-3 rounded-lg text-[15px] font-bold transition ${activeName === id ? 'bg-white text-navy' : 'text-slate-200 hover:bg-white/10'}`}
-                style={{ minHeight: '44px' }}>{label}</button>
+              <button key={id} onClick={() => setView({ name: id })} className={`px-3 rounded-lg text-[15px] font-bold transition ${active === id ? 'bg-white text-navy' : 'text-slate-200 hover:bg-white/10'}`} style={{ minHeight: '44px' }}>{label}</button>
             ))}
           </nav>
-          <a href="guide.html" target="_blank" rel="noopener"
-            className="border border-white/40 hover:bg-white/10 text-white text-sm font-medium px-3 rounded-lg whitespace-nowrap"
-            style={{ minHeight: '44px', display: 'flex', alignItems: 'center', gap: '4px' }}>📖 使い方</a>
+          <a href="guide.html" target="_blank" rel="noopener" className="border border-white/40 hover:bg-white/10 text-white text-sm font-medium px-3 rounded-lg whitespace-nowrap" style={{ minHeight: '44px', display: 'flex', alignItems: 'center', gap: '4px' }}>📖 使い方</a>
         </div>
       </div>
     </header>
@@ -285,92 +230,126 @@ function Header({ view, setView }) {
 function App() {
   const ui = useUI();
   const [state, setState] = useState(loadAll);
-  const [view, setView] = useState({ name: 'list' });
+  const [view, setView] = useState({ name: 'properties' });
   useEffect(() => { saveAll(state); }, [state]);
 
-  const updateProject = (id, updater) => {
-    setState(s => ({ ...s, projects: s.projects.map(p => p.id === id ? { ...updater(p), updatedAt: nowISO() } : p) }));
+  // 物件
+  const addProperty = async () => {
+    const name = await ui.prompt({ title: '物件（案件）を登録', message: '物件名・現場名やお客様名など、分かりやすい名前を入力してください。', placeholder: '例）山田様邸 浴室リフォーム / 〇〇ビル 改修' });
+    if (!name) return;
+    const p = { id: uuid(), name, clientName: '', siteAddress: '', memo: '', createdAt: nowISO(), updatedAt: nowISO() };
+    setState(s => ({ ...s, properties: [p, ...s.properties] }));
+    setView({ name: 'property', id: p.id });
   };
-  const addProject = () => {
-    const p = defaultProject();
-    setState(s => ({ ...s, projects: [p, ...s.projects] }));
-    setView({ name: 'edit', id: p.id });
-  };
-  const duplicateProject = (id) => {
-    const orig = state.projects.find(p => p.id === id); if (!orig) return;
-    const copy = { ...JSON.parse(JSON.stringify(orig)), id: uuid(), name: (orig.name || '無題') + '（複製）', createdAt: nowISO(), updatedAt: nowISO() };
-    copy.lines = (copy.lines || []).map(l => ({ ...l, id: uuid() }));
-    setState(s => ({ ...s, projects: [copy, ...s.projects] }));
-  };
-  const deleteProject = async (id) => {
-    const p = state.projects.find(x => x.id === id);
-    const ok = await ui.confirm({ title: '見積を削除しますか？', message: `「${p?.name || '無題'}」を削除します。この操作は元に戻せません。`, danger: true, confirmLabel: '🗑 削除する' });
-    if (ok) setState(s => ({ ...s, projects: s.projects.filter(p => p.id !== id) }));
+  const updateProperty = (id, updater) => setState(s => ({ ...s, properties: s.properties.map(p => p.id === id ? { ...updater(p), updatedAt: nowISO() } : p) }));
+  const deleteProperty = async (id) => {
+    const p = state.properties.find(x => x.id === id);
+    const ec = state.estimates.filter(e => e.propertyId === id).length;
+    const ok = await ui.confirm({ title: '物件を削除しますか？', message: `「${p?.name || '無題'}」と、ひも付く見積${ec}件・請求書もすべて削除します。元に戻せません。`, danger: true, confirmLabel: '🗑 削除する' });
+    if (ok) setState(s => ({ ...s, properties: s.properties.filter(p => p.id !== id), estimates: s.estimates.filter(e => e.propertyId !== id), invoices: s.invoices.filter(iv => iv.propertyId !== id) }));
   };
 
-  // テンプレート操作
-  const applyTemplate = (projectId, templateId) => {
-    const tpl = state.templates.find(t => t.id === templateId); if (!tpl) return;
-    updateProject(projectId, p => ({ ...p, lines: applyTemplateToLines(p.lines, tpl) }));
+  // 見積
+  const addEstimate = (propertyId) => {
+    const prop = state.properties.find(p => p.id === propertyId);
+    const e = { id: uuid(), propertyId, name: prop ? (prop.name + ' 見積') : '見積', workType: '', staffName: '', estimateDate: todayISO(), validUntil: '', memo: '', taxRate: 10, printFormat: 'standard', status: 'draft', confirmedAt: null, lines: [], createdAt: nowISO(), updatedAt: nowISO() };
+    setState(s => ({ ...s, estimates: [e, ...s.estimates] }));
+    setView({ name: 'estimate', id: e.id });
   };
-  const saveProjectAsTemplate = async (projectId) => {
-    const p = state.projects.find(x => x.id === projectId); if (!p) return;
-    const name = await ui.prompt({ title: 'テンプレートとして保存', message: 'よく使う内訳セットとして登録します。名前を付けてください。', defaultValue: p.name || 'マイテンプレート', placeholder: '例）浴室リフォーム 標準セット' });
+  const updateEstimate = (id, updater) => setState(s => ({ ...s, estimates: s.estimates.map(e => e.id === id ? { ...updater(e), updatedAt: nowISO() } : e) }));
+  const duplicateEstimate = (id) => {
+    const o = state.estimates.find(e => e.id === id); if (!o) return;
+    const c = { ...JSON.parse(JSON.stringify(o)), id: uuid(), name: o.name + '（複製）', status: 'draft', confirmedAt: null, createdAt: nowISO(), updatedAt: nowISO() };
+    c.lines = (c.lines || []).map(l => ({ ...l, id: uuid() }));
+    setState(s => ({ ...s, estimates: [c, ...s.estimates] }));
+  };
+  const deleteEstimate = async (id) => {
+    const e = state.estimates.find(x => x.id === id);
+    const ok = await ui.confirm({ title: '見積を削除しますか？', message: `「${e?.name || '無題'}」を削除します。ひも付く請求書も削除されます。元に戻せません。`, danger: true, confirmLabel: '🗑 削除する' });
+    if (ok) setState(s => ({ ...s, estimates: s.estimates.filter(e => e.id !== id), invoices: s.invoices.filter(iv => iv.estimateId !== id) }));
+  };
+  const confirmEstimate = async (id) => {
+    const ok = await ui.confirm({ title: 'この見積を確定しますか？', message: '確定すると内容がロックされます（編集したい時は「確定解除」で戻せます）。確定後に請求書を作成できます。', confirmLabel: '確定する' });
+    if (ok) updateEstimate(id, e => ({ ...e, status: 'confirmed', confirmedAt: nowISO() }));
+  };
+  const unconfirmEstimate = async (id) => {
+    const ok = await ui.confirm({ title: '確定を解除しますか？', message: '編集できる状態（下書き）に戻します。作成済みの請求書はそのまま残ります。', confirmLabel: '確定解除' });
+    if (ok) updateEstimate(id, e => ({ ...e, status: 'draft' }));
+  };
+
+  // 請求書
+  const createInvoice = (estimateId) => {
+    const existing = state.invoices.find(iv => iv.estimateId === estimateId);
+    if (existing) { setView({ name: 'invoice', id: existing.id }); return; }
+    const e = state.estimates.find(x => x.id === estimateId); if (!e) return;
+    const r = computeEstimate(e);
+    const iv = { id: uuid(), estimateId, propertyId: e.propertyId, invoiceNo: nextInvoiceNo(state.invoices), invoiceDate: todayISO(), dueDate: '', note: '上記の通りご請求申し上げます。', lines: JSON.parse(JSON.stringify(e.lines || [])), taxRate: r.taxRate, subtotal: r.subtotal, tax: r.tax, total: r.total, sourceName: e.name, workType: e.workType, createdAt: nowISO(), updatedAt: nowISO() };
+    setState(s => ({ ...s, invoices: [iv, ...s.invoices] }));
+    setView({ name: 'invoice', id: iv.id });
+  };
+  const updateInvoice = (id, updater) => setState(s => ({ ...s, invoices: s.invoices.map(iv => iv.id === id ? { ...updater(iv), updatedAt: nowISO() } : iv) }));
+  const deleteInvoice = async (id) => {
+    const ok = await ui.confirm({ title: '請求書を削除しますか？', message: 'この請求書を削除します。元に戻せません。', danger: true, confirmLabel: '🗑 削除する' });
+    if (ok) setState(s => ({ ...s, invoices: s.invoices.filter(iv => iv.id !== id) }));
+  };
+
+  // テンプレート
+  const applyTemplate = (estimateId, templateId) => { const t = state.templates.find(t => t.id === templateId); if (!t) return; updateEstimate(estimateId, e => ({ ...e, lines: applyTemplateToLines(e.lines, t) })); };
+  const saveEstimateAsTemplate = async (estimateId) => {
+    const e = state.estimates.find(x => x.id === estimateId); if (!e) return;
+    const name = await ui.prompt({ title: 'テンプレートとして保存', message: 'よく使う内訳セットとして登録します。', defaultValue: e.name || 'マイテンプレート', placeholder: '例）浴室リフォーム 標準セット' });
     if (!name) return;
-    const tpl = { id: uuid(), name, categories: linesToTemplateCategories(p.lines), createdAt: nowISO(), updatedAt: nowISO() };
-    setState(s => ({ ...s, templates: [tpl, ...s.templates] }));
+    const t = { id: uuid(), name, categories: linesToTemplateCategories(e.lines), createdAt: nowISO(), updatedAt: nowISO() };
+    setState(s => ({ ...s, templates: [t, ...s.templates] }));
     await ui.confirm({ title: '保存しました', message: '「テンプレート」画面で確認・編集できます。', confirmLabel: 'OK' });
   };
-  const addTemplate = async () => {
-    const name = await ui.prompt({ title: '新しいテンプレート', message: 'テンプレートの名前を入力してください。', defaultValue: '', placeholder: '例）外壁塗装 標準セット' });
-    if (!name) return;
-    const tpl = { id: uuid(), name, categories: [], createdAt: nowISO(), updatedAt: nowISO() };
-    setState(s => ({ ...s, templates: [tpl, ...s.templates] }));
-    setView({ name: 'template-edit', id: tpl.id });
-  };
-  const updateTemplate = (id, updater) => {
-    setState(s => ({ ...s, templates: s.templates.map(t => t.id === id ? { ...updater(t), updatedAt: nowISO() } : t) }));
-  };
-  const duplicateTemplate = (id) => {
-    const orig = state.templates.find(t => t.id === id); if (!orig) return;
-    const copy = { ...JSON.parse(JSON.stringify(orig)), id: uuid(), name: orig.name + '（複製）', createdAt: nowISO(), updatedAt: nowISO() };
-    setState(s => ({ ...s, templates: [copy, ...s.templates] }));
-  };
-  const deleteTemplate = async (id) => {
-    const t = state.templates.find(x => x.id === id);
-    const ok = await ui.confirm({ title: 'テンプレートを削除しますか？', message: `「${t?.name || '無題'}」を削除します。この操作は元に戻せません。`, danger: true, confirmLabel: '🗑 削除する' });
-    if (ok) setState(s => ({ ...s, templates: s.templates.filter(t => t.id !== id) }));
-  };
+  const addTemplate = async () => { const name = await ui.prompt({ title: '新しいテンプレート', placeholder: '例）外壁塗装 標準セット' }); if (!name) return; const t = { id: uuid(), name, categories: [], createdAt: nowISO(), updatedAt: nowISO() }; setState(s => ({ ...s, templates: [t, ...s.templates] })); setView({ name: 'template-edit', id: t.id }); };
+  const updateTemplate = (id, updater) => setState(s => ({ ...s, templates: s.templates.map(t => t.id === id ? { ...updater(t), updatedAt: nowISO() } : t) }));
+  const duplicateTemplate = (id) => { const o = state.templates.find(t => t.id === id); if (!o) return; const c = { ...JSON.parse(JSON.stringify(o)), id: uuid(), name: o.name + '（複製）', createdAt: nowISO(), updatedAt: nowISO() }; setState(s => ({ ...s, templates: [c, ...s.templates] })); };
+  const deleteTemplate = async (id) => { const t = state.templates.find(x => x.id === id); const ok = await ui.confirm({ title: 'テンプレートを削除しますか？', message: `「${t?.name || '無題'}」を削除します。元に戻せません。`, danger: true, confirmLabel: '🗑 削除する' }); if (ok) setState(s => ({ ...s, templates: s.templates.filter(t => t.id !== id) })); };
   const addSampleTemplate = () => setState(s => ({ ...s, templates: [makeSampleTemplate(), ...s.templates] }));
 
   return (
     <div className="min-h-screen flex flex-col">
       <Header view={view} setView={setView} />
       <main className="flex-1 max-w-6xl mx-auto w-full px-4 sm:px-6 py-6">
-        {view.name === 'list' && (
-          <ProjectList projects={state.projects} onOpen={id => setView({ name: 'edit', id })}
-            onAdd={addProject} onDuplicate={duplicateProject} onDelete={deleteProject} />
+        {view.name === 'properties' && (
+          <PropertyList properties={state.properties} estimates={state.estimates} invoices={state.invoices}
+            onOpen={id => setView({ name: 'property', id })} onAdd={addProperty} onDelete={deleteProperty} />
         )}
-        {view.name === 'edit' && (
-          <ProjectEditor project={state.projects.find(p => p.id === view.id)} templates={state.templates}
-            companyInfo={state.companyInfo}
-            onChange={updater => updateProject(view.id, updater)}
-            onApplyTemplate={tid => applyTemplate(view.id, tid)}
-            onSaveAsTemplate={() => saveProjectAsTemplate(view.id)}
-            onBack={() => setView({ name: 'list' })} />
+        {view.name === 'property' && (
+          <PropertyDetail property={state.properties.find(p => p.id === view.id)}
+            estimates={state.estimates.filter(e => e.propertyId === view.id)}
+            invoices={state.invoices.filter(iv => iv.propertyId === view.id)}
+            onChange={updater => updateProperty(view.id, updater)}
+            onBack={() => setView({ name: 'properties' })}
+            onAddEstimate={() => addEstimate(view.id)} onOpenEstimate={id => setView({ name: 'estimate', id })}
+            onDuplicateEstimate={duplicateEstimate} onDeleteEstimate={deleteEstimate}
+            onOpenInvoice={id => setView({ name: 'invoice', id })} onDeleteInvoice={deleteInvoice} />
         )}
+        {view.name === 'estimate' && (() => {
+          const est = state.estimates.find(e => e.id === view.id);
+          const prop = est ? state.properties.find(p => p.id === est.propertyId) : null;
+          const inv = est ? state.invoices.find(iv => iv.estimateId === est.id) : null;
+          return <EstimateEditor estimate={est} property={prop} templates={state.templates} companyInfo={state.companyInfo} hasInvoice={!!inv}
+            onChange={updater => updateEstimate(view.id, updater)} onApplyTemplate={tid => applyTemplate(view.id, tid)} onSaveAsTemplate={() => saveEstimateAsTemplate(view.id)}
+            onConfirm={() => confirmEstimate(view.id)} onUnconfirm={() => unconfirmEstimate(view.id)} onCreateInvoice={() => createInvoice(view.id)}
+            onBack={() => setView({ name: 'property', id: est ? est.propertyId : null })} />;
+        })()}
+        {view.name === 'invoice' && (() => {
+          const inv = state.invoices.find(iv => iv.id === view.id);
+          const prop = inv ? state.properties.find(p => p.id === inv.propertyId) : null;
+          return <InvoiceView invoice={inv} property={prop} companyInfo={state.companyInfo}
+            onChange={updater => updateInvoice(view.id, updater)} onDelete={() => deleteInvoice(view.id)}
+            onBack={() => setView({ name: 'property', id: inv ? inv.propertyId : null })} />;
+        })()}
         {view.name === 'templates' && (
-          <TemplateList templates={state.templates} onOpen={id => setView({ name: 'template-edit', id })}
-            onAdd={addTemplate} onAddSample={addSampleTemplate} onDuplicate={duplicateTemplate} onDelete={deleteTemplate} />
+          <TemplateList templates={state.templates} onOpen={id => setView({ name: 'template-edit', id })} onAdd={addTemplate} onAddSample={addSampleTemplate} onDuplicate={duplicateTemplate} onDelete={deleteTemplate} />
         )}
         {view.name === 'template-edit' && (
-          <TemplateEditor template={state.templates.find(t => t.id === view.id)}
-            onChange={updater => updateTemplate(view.id, updater)}
-            onBack={() => setView({ name: 'templates' })} />
+          <TemplateEditor template={state.templates.find(t => t.id === view.id)} onChange={updater => updateTemplate(view.id, updater)} onBack={() => setView({ name: 'templates' })} />
         )}
-        {view.name === 'settings' && (
-          <Settings state={state} setState={setState} />
-        )}
+        {view.name === 'settings' && <Settings state={state} setState={setState} />}
       </main>
       <footer className="border-t border-slate-200 bg-white text-[13px] text-slate-500 py-3 text-center no-print">
         スマート見積（汎用版） by HEALTH ARCHI ／ データはこの端末のブラウザ内にのみ保存されます（外部送信なし）
@@ -379,38 +358,36 @@ function App() {
   );
 }
 
-// ============ 見積一覧 ============
-function ProjectList({ projects, onOpen, onAdd, onDuplicate, onDelete }) {
+// ============ 物件一覧 ============
+function PropertyList({ properties, estimates, invoices, onOpen, onAdd, onDelete }) {
   return (
     <div>
       <div className="flex items-center justify-between mb-5 flex-wrap gap-3">
-        <h1 className="text-2xl font-bold text-navy">見積一覧</h1>
-        <button onClick={onAdd} className="bg-cta hover:bg-ctad text-white font-bold px-6 rounded-lg" style={{ minHeight: '56px' }}>＋ 新しい見積を作る</button>
+        <h1 className="text-2xl font-bold text-navy">物件一覧</h1>
+        <button onClick={onAdd} className="bg-cta hover:bg-ctad text-white font-bold px-6 rounded-lg" style={{ minHeight: '56px' }}>＋ 物件を登録する</button>
       </div>
-      {projects.length === 0 ? (
+      {properties.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-center bg-white border-2 border-dashed border-slate-300 rounded-xl">
-          <div className="text-6xl mb-4" aria-hidden="true">🧾</div>
-          <h2 className="text-xl font-bold text-navy mb-2">まだ見積はありません</h2>
-          <p className="text-slate-600 mb-6 text-[16px]">白紙から見積を作るか、登録したテンプレートを呼び出して作れます。</p>
-          <button onClick={onAdd} className="bg-cta hover:bg-ctad text-white font-bold px-6 rounded-lg" style={{ minHeight: '56px' }}>＋ 最初の見積を作ってみる</button>
+          <div className="text-6xl mb-4" aria-hidden="true">🏠</div>
+          <h2 className="text-xl font-bold text-navy mb-2">まだ物件はありません</h2>
+          <p className="text-slate-600 mb-6 text-[16px]">まず物件（案件）を登録し、その中で見積を作っていきます。</p>
+          <button onClick={onAdd} className="bg-cta hover:bg-ctad text-white font-bold px-6 rounded-lg" style={{ minHeight: '56px' }}>＋ 最初の物件を登録する</button>
         </div>
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {projects.map(p => {
-            const est = computeEstimate(p);
+          {properties.map(p => {
+            const ec = estimates.filter(e => e.propertyId === p.id).length;
+            const ic = invoices.filter(iv => iv.propertyId === p.id).length;
             return (
               <div key={p.id} className="bg-white border-2 border-slate-200 rounded-xl p-4 hover:border-navy/40 transition">
                 <button onClick={() => onOpen(p.id)} className="text-left w-full">
-                  <div className="font-bold text-navy truncate text-[17px]">{p.name || '（無題の見積）'}</div>
-                  <div className="text-[14px] text-slate-500 mt-0.5 truncate">
-                    {p.clientName ? cleanClientName(p.clientName) + ' 様' : '施主名未入力'}{p.workType ? ' / ' + p.workType : ''}
-                  </div>
-                  <div className="text-2xl font-bold text-navy num mt-2">¥{fmt(est.total)}<span className="text-[13px] text-slate-400 font-normal ml-1">税込</span></div>
+                  <div className="font-bold text-navy truncate text-[17px]">{p.name || '（無題の物件）'}</div>
+                  <div className="text-[14px] text-slate-500 mt-0.5 truncate">{p.clientName ? cleanClientName(p.clientName) + ' 様' : 'お客様名 未入力'}</div>
+                  <div className="text-[13px] text-slate-500 mt-2">見積 {ec}件 ・ 請求書 {ic}件</div>
                   <div className="text-[12px] text-slate-400 mt-1">更新 {fmtDate(p.updatedAt)}</div>
                 </button>
                 <div className="flex gap-3 mt-3 pt-3 border-t border-slate-100 items-center text-[14px]">
                   <button onClick={() => onOpen(p.id)} className="font-bold text-navy hover:underline">開く</button>
-                  <button onClick={() => onDuplicate(p.id)} className="text-slate-600 hover:text-navy">複製</button>
                   <button onClick={() => onDelete(p.id)} className="text-danger underline ml-auto">削除</button>
                 </div>
               </div>
@@ -422,83 +399,186 @@ function ProjectList({ projects, onOpen, onAdd, onDuplicate, onDelete }) {
   );
 }
 
+// ============ 物件詳細 ============
+function PropertyDetail({ property, estimates, invoices, onChange, onBack, onAddEstimate, onOpenEstimate, onDuplicateEstimate, onDeleteEstimate, onOpenInvoice, onDeleteInvoice }) {
+  if (!property) return <div className="text-slate-500">物件が見つかりません。<button onClick={onBack} className="text-navy underline ml-2">一覧へ戻る</button></div>;
+  const set = (key) => (e) => { const v = e.target.value; onChange(p => ({ ...p, [key]: v })); };
+  return (
+    <div>
+      <div className="flex items-center gap-3 mb-4 flex-wrap">
+        <button onClick={onBack} className="bg-white border-2 border-navy text-navy font-bold px-4 rounded-lg hover:bg-slate-50" style={{ minHeight: '44px' }}>← 物件一覧</button>
+        <input value={property.name} onChange={set('name')} className="text-xl font-bold text-navy bg-transparent border-b-2 border-transparent hover:border-slate-300 focus:border-navy focus:outline-none flex-1 min-w-0" placeholder="物件名" />
+      </div>
+      <div className="bg-white border-2 border-slate-200 rounded-xl p-5 mb-6 max-w-3xl">
+        <h2 className="font-bold text-navy mb-3 text-[18px]">物件情報</h2>
+        <div className="grid sm:grid-cols-2 gap-5">
+          <Field label="お客様名（施主名）" hint="「様」は見積書・請求書で自動で付きます"><input className={inputCls} value={property.clientName} onChange={set('clientName')} placeholder="例）山田 太郎" /></Field>
+          <Field label="工事場所（住所）"><input className={inputCls} value={property.siteAddress} onChange={set('siteAddress')} placeholder="例）東京都〇〇区…" /></Field>
+          <div className="sm:col-span-2"><Field label="メモ（社内用）"><textarea className={inputCls + ' h-20 resize-none'} value={property.memo} onChange={set('memo')} placeholder="例）紹介案件 / 連絡先など" /></Field></div>
+        </div>
+        <p className="text-[13px] text-slate-500 mt-2">※ お客様名・工事場所は、この物件の見積書・請求書に自動で反映されます。</p>
+      </div>
+
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <h2 className="text-xl font-bold text-navy">この物件の見積</h2>
+        <button onClick={onAddEstimate} className="bg-cta hover:bg-ctad text-white font-bold px-5 rounded-lg" style={{ minHeight: '48px' }}>＋ 見積を作る</button>
+      </div>
+      {estimates.length === 0 ? (
+        <div className="bg-white border-2 border-dashed border-slate-300 rounded-xl p-8 text-center text-slate-500 mb-8">まだ見積はありません。「＋ 見積を作る」から作成しましょう。</div>
+      ) : (
+        <div className="space-y-2 mb-8">
+          {estimates.map(e => {
+            const r = computeEstimate(e);
+            const confirmed = e.status === 'confirmed';
+            return (
+              <div key={e.id} className="bg-white border-2 border-slate-200 rounded-xl p-4 flex items-center justify-between gap-3 flex-wrap">
+                <button onClick={() => onOpenEstimate(e.id)} className="text-left min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-bold text-navy truncate text-[17px]">{e.name || '無題の見積'}</span>
+                    <span className={`text-[12px] font-bold px-2 py-0.5 rounded ${confirmed ? 'bg-green-100 text-green-800' : 'bg-slate-100 text-slate-500'}`}>{confirmed ? '確定済み' : '下書き'}</span>
+                  </div>
+                  <div className="text-[14px] text-slate-500 mt-0.5">{e.workType || '工事種別未設定'} ・ 更新 {fmtDate(e.updatedAt)}</div>
+                </button>
+                <div className="flex items-center gap-3">
+                  <span className="num text-xl font-bold text-navy">¥{fmt(r.total)}</span>
+                  <button onClick={() => onOpenEstimate(e.id)} className="font-bold text-navy hover:underline text-[14px]">開く</button>
+                  <button onClick={() => onDuplicateEstimate(e.id)} className="text-slate-600 hover:text-navy text-[14px]">複製</button>
+                  <button onClick={() => onDeleteEstimate(e.id)} className="text-danger underline text-[13px]">削除</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <h2 className="text-xl font-bold text-navy mb-3">この物件の請求書</h2>
+      {invoices.length === 0 ? (
+        <div className="bg-white border-2 border-dashed border-slate-300 rounded-xl p-6 text-center text-slate-500 text-[15px]">請求書は、見積を「確定」してから作成できます。</div>
+      ) : (
+        <div className="space-y-2">
+          {invoices.map(iv => (
+            <div key={iv.id} className="bg-white border-2 border-slate-200 rounded-xl p-4 flex items-center justify-between gap-3 flex-wrap">
+              <button onClick={() => onOpenInvoice(iv.id)} className="text-left min-w-0 flex-1">
+                <div className="font-bold text-navy truncate text-[17px]">請求書 No.{iv.invoiceNo}</div>
+                <div className="text-[14px] text-slate-500 mt-0.5">{iv.sourceName || ''} ・ 請求日 {fmtDate(iv.invoiceDate)}</div>
+              </button>
+              <div className="flex items-center gap-3">
+                <span className="num text-xl font-bold text-navy">¥{fmt(iv.total)}</span>
+                <button onClick={() => onOpenInvoice(iv.id)} className="font-bold text-navy hover:underline text-[14px]">開く</button>
+                <button onClick={() => onDeleteInvoice(iv.id)} className="text-danger underline text-[13px]">削除</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ============ 見積エディタ ============
-function ProjectEditor({ project, templates, companyInfo, onChange, onApplyTemplate, onSaveAsTemplate, onBack }) {
+function EstimateEditor({ estimate, property, templates, companyInfo, hasInvoice, onChange, onApplyTemplate, onSaveAsTemplate, onConfirm, onUnconfirm, onCreateInvoice, onBack }) {
   const [tab, setTab] = useState('basic');
-  if (!project) return <div className="text-slate-500">見積が見つかりません。<button onClick={onBack} className="text-navy underline ml-2">一覧へ戻る</button></div>;
-  const est = useMemo(() => computeEstimate(project), [project]);
+  if (!estimate) return <div className="text-slate-500">見積が見つかりません。<button onClick={onBack} className="text-navy underline ml-2">戻る</button></div>;
+  const est = useMemo(() => computeEstimate(estimate), [estimate]);
+  const locked = estimate.status === 'confirmed';
+  const docHeader = { ...estimate, clientName: property?.clientName || '', siteAddress: property?.siteAddress || '' };
   return (
     <div className="pb-28">
-      <div className="flex items-center gap-3 mb-4 flex-wrap">
-        <button onClick={onBack} className="bg-white border-2 border-navy text-navy font-bold px-4 rounded-lg hover:bg-slate-50" style={{ minHeight: '44px' }}>← 一覧</button>
-        <input value={project.name} onChange={e => onChange(p => ({ ...p, name: e.target.value }))}
-          className="text-xl font-bold text-navy bg-transparent border-b-2 border-transparent hover:border-slate-300 focus:border-navy focus:outline-none flex-1 min-w-0" placeholder="見積名（例：山田様邸 浴室リフォーム工事）" />
+      <div className="flex items-center gap-3 mb-3 flex-wrap">
+        <button onClick={onBack} className="bg-white border-2 border-navy text-navy font-bold px-4 rounded-lg hover:bg-slate-50" style={{ minHeight: '44px' }}>← 物件へ</button>
+        <input value={estimate.name} onChange={e => onChange(p => ({ ...p, name: e.target.value }))} disabled={locked}
+          className="text-xl font-bold text-navy bg-transparent border-b-2 border-transparent hover:border-slate-300 focus:border-navy focus:outline-none flex-1 min-w-0 disabled:hover:border-transparent" placeholder="見積名" />
       </div>
+      <div className="text-[14px] text-slate-500 mb-3">物件：{property?.name || '—'}{property?.clientName ? `（${cleanClientName(property.clientName)} 様）` : ''}</div>
+
+      {/* 状態バー */}
+      <div className={`rounded-xl px-4 py-3 mb-4 flex items-center justify-between gap-3 flex-wrap no-print ${locked ? 'bg-green-50 border-2 border-green-200' : 'bg-slate-100'}`}>
+        <div className="flex items-center gap-2">
+          <span className={`text-[13px] font-bold px-2 py-1 rounded ${locked ? 'bg-green-100 text-green-800' : 'bg-white text-slate-500'}`}>{locked ? '✓ 確定済み（編集ロック中）' : '下書き'}</span>
+          {locked && estimate.confirmedAt && <span className="text-[13px] text-slate-500">{fmtDate(estimate.confirmedAt)} 確定</span>}
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {!locked ? (
+            <button onClick={onConfirm} className="bg-cta hover:bg-ctad text-white font-bold px-5 rounded-lg" style={{ minHeight: '48px' }}>✓ この見積を確定する</button>
+          ) : (
+            <>
+              <button onClick={onCreateInvoice} className="bg-cta hover:bg-ctad text-white font-bold px-5 rounded-lg" style={{ minHeight: '48px' }}>{hasInvoice ? '🧾 請求書を開く' : '🧾 請求書を作成'}</button>
+              <button onClick={onUnconfirm} className="bg-white border-2 border-navy text-navy font-bold px-4 rounded-lg hover:bg-slate-50" style={{ minHeight: '48px' }}>確定解除</button>
+            </>
+          )}
+        </div>
+      </div>
+
       <div className="flex gap-1 mb-5 border-b-2 border-slate-200 overflow-x-auto">
         {[['basic', '① 基本情報'], ['details', '② 内訳明細'], ['print', '③ 見積書プレビュー']].map(([id, label]) => (
-          <button key={id} onClick={() => setTab(id)}
-            className={`px-4 py-2.5 text-[16px] font-bold -mb-0.5 border-b-4 transition whitespace-nowrap ${tab === id ? 'border-orange text-navy' : 'border-transparent text-slate-400 hover:text-slate-600'}`}>{label}</button>
+          <button key={id} onClick={() => setTab(id)} className={`px-4 py-2.5 text-[16px] font-bold -mb-0.5 border-b-4 transition whitespace-nowrap ${tab === id ? 'border-orange text-navy' : 'border-transparent text-slate-400 hover:text-slate-600'}`}>{label}</button>
         ))}
       </div>
-      {tab === 'basic' && <TabBasic project={project} onChange={onChange} />}
-      {tab === 'details' && <TabDetails project={project} est={est} templates={templates} onChange={onChange} onApplyTemplate={onApplyTemplate} onSaveAsTemplate={onSaveAsTemplate} />}
-      {tab === 'print' && <PrintPreview project={project} est={est} companyInfo={companyInfo} onChange={onChange} />}
+      {tab === 'basic' && <TabBasic estimate={estimate} onChange={onChange} locked={locked} />}
+      {tab === 'details' && <TabDetails estimate={estimate} est={est} templates={templates} onChange={onChange} onApplyTemplate={onApplyTemplate} onSaveAsTemplate={onSaveAsTemplate} locked={locked} />}
+      {tab === 'print' && <PrintPreview docHeader={docHeader} est={est} companyInfo={companyInfo} onChange={onChange} />}
       {tab !== 'print' && <TotalBar est={est} />}
     </div>
   );
 }
 
-function TabBasic({ project, onChange }) {
+function TabBasic({ estimate, onChange, locked }) {
   const set = (key) => (e) => { const v = e.target.value; onChange(p => ({ ...p, [key]: v })); };
   return (
     <div className="bg-white border-2 border-slate-200 rounded-xl p-5 sm:p-6 max-w-3xl">
+      {locked && <div className="text-[14px] text-green-800 bg-green-50 border border-green-200 rounded-lg px-3 py-2 mb-4">確定済みのため編集できません。変更するには上の「確定解除」を押してください。</div>}
       <div className="grid sm:grid-cols-2 gap-5">
-        <Field label="工事名・見積名"><input className={inputCls} value={project.name} onChange={set('name')} placeholder="例）山田様邸 浴室リフォーム工事" /></Field>
-        <Field label="工事種別" hint="リフォーム / 新築 / 修繕 / 解体 など自由に"><input className={inputCls} value={project.workType} onChange={set('workType')} placeholder="例）水まわりリフォーム" /></Field>
-        <Field label="施主名" hint="「様」は自動で付きます"><input className={inputCls} value={project.clientName} onChange={set('clientName')} placeholder="例）山田 太郎" /></Field>
-        <Field label="担当者"><input className={inputCls} value={project.staffName} onChange={set('staffName')} placeholder="例）田中" /></Field>
-        <Field label="工事場所（住所）"><input className={inputCls} value={project.siteAddress} onChange={set('siteAddress')} placeholder="例）東京都〇〇区…" /></Field>
-        <div className="grid grid-cols-2 gap-4">
-          <Field label="見積日"><input type="date" className={inputCls} value={project.estimateDate} onChange={set('estimateDate')} /></Field>
-          <Field label="有効期限"><input type="date" className={inputCls} value={project.validUntil} onChange={set('validUntil')} /></Field>
-        </div>
-        <Field label="消費税率（％）"><input type="number" inputMode="numeric" className={inputCls} value={project.taxRate} onChange={e => { const v = e.target.value; onChange(p => ({ ...p, taxRate: v === '' ? 0 : parseFloat(v) })); }} /></Field>
-        <div className="sm:col-span-2"><Field label="社内メモ（見積書には出ません）"><textarea className={inputCls + ' h-20 resize-none'} value={project.memo} onChange={set('memo')} placeholder="例）契約待ち / 値引き要相談 など" /></Field></div>
+        <Field label="見積名"><input className={inputCls} value={estimate.name} onChange={set('name')} disabled={locked} placeholder="例）浴室リフォーム工事 御見積" /></Field>
+        <Field label="工事種別" hint="リフォーム / 新築 / 修繕 / 解体 など自由に"><input className={inputCls} value={estimate.workType} onChange={set('workType')} disabled={locked} placeholder="例）水まわりリフォーム" /></Field>
+        <Field label="担当者"><input className={inputCls} value={estimate.staffName} onChange={set('staffName')} disabled={locked} placeholder="例）田中" /></Field>
+        <Field label="消費税率（％）"><input type="number" inputMode="numeric" className={inputCls} value={estimate.taxRate} onChange={e => { const v = e.target.value; onChange(p => ({ ...p, taxRate: v === '' ? 0 : parseFloat(v) })); }} disabled={locked} /></Field>
+        <Field label="見積日"><input type="date" className={inputCls} value={estimate.estimateDate} onChange={set('estimateDate')} disabled={locked} /></Field>
+        <Field label="有効期限"><input type="date" className={inputCls} value={estimate.validUntil} onChange={set('validUntil')} disabled={locked} /></Field>
+        <div className="sm:col-span-2"><Field label="社内メモ（見積書には出ません）"><textarea className={inputCls + ' h-20 resize-none'} value={estimate.memo} onChange={set('memo')} disabled={locked} placeholder="例）契約待ち / 値引き要相談 など" /></Field></div>
       </div>
+      <p className="text-[13px] text-slate-500 mt-3">※ お客様名・工事場所は「物件情報」で管理します（物件画面で編集）。</p>
     </div>
   );
 }
 
 // ============ 内訳明細タブ ============
-function TabDetails({ project, est, templates, onChange, onApplyTemplate, onSaveAsTemplate }) {
+function TabDetails({ estimate, est, templates, onChange, onApplyTemplate, onSaveAsTemplate, locked }) {
   const ui = useUI();
   const [hideUnused, setHideUnused] = useState(false);
   const groups = useMemo(() => groupLines(est.lines), [est.lines]);
-  const isEmpty = (project.lines || []).length === 0;
-
+  const isEmpty = (estimate.lines || []).length === 0;
   const updateLine = (id, patch) => onChange(p => ({ ...p, lines: p.lines.map(l => l.id === id ? { ...l, ...patch } : l) }));
   const addItem = (group, categoryName) => onChange(p => ({ ...p, lines: [...p.lines, { id: uuid(), group, categoryName, name: '', spec: '', quantity: '', unit: '式', price: '', enabled: true }] }));
   const deleteLine = (id) => onChange(p => ({ ...p, lines: p.lines.filter(l => l.id !== id) }));
-  const addCategory = async () => {
-    const name = await ui.prompt({ title: 'カテゴリを追加', message: '工種・分類の名前を入力してください。', defaultValue: '', placeholder: '例）内装工事' });
-    if (!name) return;
-    onChange(p => { const used = [...new Set(p.lines.map(l => l.group))]; const group = nextAvailableCategoryCode(used);
-      return { ...p, lines: [...p.lines, { id: uuid(), group, categoryName: name, name: '', spec: '', quantity: '', unit: '式', price: '', enabled: true }] }; });
-  };
-  const renameCategory = async (group, current) => {
-    const name = await ui.prompt({ title: 'カテゴリ名を変更', defaultValue: current, placeholder: 'カテゴリ名' });
-    if (!name) return;
-    onChange(p => ({ ...p, lines: p.lines.map(l => l.group === group ? { ...l, categoryName: name } : l) }));
-  };
-  const deleteCategory = async (group, name) => {
-    const ok = await ui.confirm({ title: 'カテゴリを削除しますか？', message: `「${name}」とその中の項目をすべて削除します。元に戻せません。`, danger: true, confirmLabel: '🗑 削除する' });
-    if (ok) onChange(p => ({ ...p, lines: p.lines.filter(l => l.group !== group) }));
-  };
+  const addCategory = async () => { const name = await ui.prompt({ title: 'カテゴリを追加', message: '工種・分類の名前を入力してください。', placeholder: '例）内装工事' }); if (!name) return; onChange(p => { const used = [...new Set(p.lines.map(l => l.group))]; const group = nextAvailableCategoryCode(used); return { ...p, lines: [...p.lines, { id: uuid(), group, categoryName: name, name: '', spec: '', quantity: '', unit: '式', price: '', enabled: true }] }; }); };
+  const renameCategory = async (group, current) => { const name = await ui.prompt({ title: 'カテゴリ名を変更', defaultValue: current, placeholder: 'カテゴリ名' }); if (!name) return; onChange(p => ({ ...p, lines: p.lines.map(l => l.group === group ? { ...l, categoryName: name } : l) })); };
+  const deleteCategory = async (group, name) => { const ok = await ui.confirm({ title: 'カテゴリを削除しますか？', message: `「${name}」とその中の項目をすべて削除します。元に戻せません。`, danger: true, confirmLabel: '🗑 削除する' }); if (ok) onChange(p => ({ ...p, lines: p.lines.filter(l => l.group !== group) })); };
+
+  if (locked) {
+    return (
+      <div>
+        <div className="text-[14px] text-green-800 bg-green-50 border border-green-200 rounded-lg px-3 py-2 mb-4">確定済みのため編集できません。変更するには上の「確定解除」を押してください。</div>
+        <div className="space-y-4">
+          {groups.map(g => (
+            <div key={g.group} className="bg-white border-2 border-slate-200 rounded-xl overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-3 bg-slate-50 border-b-2 border-slate-200">
+                <span className="font-bold text-navy text-[17px]">{g.categoryName}</span>
+                <span className="text-[16px] font-bold text-navy num">¥{fmt(g.total)}</span>
+              </div>
+              <div className="overflow-x-auto"><table className="w-full text-[16px]" style={{ minWidth: '640px' }}>
+                <thead><tr className="text-[13px] text-slate-500 border-b border-slate-100"><th className="w-14 py-2 px-1 text-left">No</th><th className="py-2 px-2 text-left">項目名</th><th className="py-2 px-2 text-left">仕様</th><th className="w-20 py-2 px-1 text-right">数量</th><th className="w-14 py-2 px-1 text-center">単位</th><th className="w-24 py-2 px-1 text-right">単価</th><th className="w-28 py-2 px-2 text-right">金額</th></tr></thead>
+                <tbody>{g.items.filter(it => it.enabled).map(it => (<tr key={it.id} className="border-b border-slate-50"><td className="px-1 text-[13px] text-slate-400 num">{it.displayNo}</td><td className="px-2">{it.name}</td><td className="px-2 text-slate-600">{it.spec}</td><td className="px-1 text-right num">{it.qtyNum}</td><td className="px-1 text-center">{it.unit}</td><td className="px-1 text-right num">{fmt(it.priceNum)}</td><td className="px-2 text-right num font-bold">¥{fmt(it.amount)}</td></tr>))}</tbody>
+              </table></div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   const TemplateBar = (
     <div className="flex items-center gap-2 flex-wrap">
-      <select value="" onChange={e => { if (e.target.value) { onApplyTemplate(e.target.value); e.target.value = ''; } }}
-        className="px-3 border-2 border-slate-300 rounded-lg text-[16px] bg-white focus:outline-none focus:border-navy" style={{ minHeight: '48px' }}>
+      <select value="" onChange={e => { if (e.target.value) { onApplyTemplate(e.target.value); e.target.value = ''; } }} className="px-3 border-2 border-slate-300 rounded-lg text-[16px] bg-white focus:outline-none focus:border-navy" style={{ minHeight: '48px' }}>
         <option value="">📋 テンプレートを読み込む…</option>
         {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
       </select>
@@ -506,7 +586,6 @@ function TabDetails({ project, est, templates, onChange, onApplyTemplate, onSave
       {!isEmpty && <button onClick={onSaveAsTemplate} className="text-navy underline font-bold ml-auto text-[15px]">この内訳をテンプレート保存</button>}
     </div>
   );
-
   if (isEmpty) {
     return (
       <div className="bg-white border-2 border-dashed border-slate-300 rounded-xl p-8 text-center">
@@ -517,14 +596,11 @@ function TabDetails({ project, est, templates, onChange, onApplyTemplate, onSave
       </div>
     );
   }
-
   return (
     <div>
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <div className="flex-1 min-w-0">{TemplateBar}</div>
-        <label className="flex items-center gap-2 text-[15px] text-slate-600 cursor-pointer select-none">
-          <input type="checkbox" className="w-5 h-5" checked={hideUnused} onChange={e => setHideUnused(e.target.checked)} />未使用の行を隠す
-        </label>
+        <label className="flex items-center gap-2 text-[15px] text-slate-600 cursor-pointer select-none"><input type="checkbox" className="w-5 h-5" checked={hideUnused} onChange={e => setHideUnused(e.target.checked)} />未使用の行を隠す</label>
       </div>
       <datalist id="unit-options">{UNIT_OPTIONS.map(u => <option key={u} value={u} />)}</datalist>
       <div className="space-y-4">
@@ -545,19 +621,9 @@ function TabDetails({ project, est, templates, onChange, onApplyTemplate, onSave
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-[16px]" style={{ minWidth: '720px' }}>
-                  <thead>
-                    <tr className="text-[13px] text-slate-500 border-b border-slate-100 bg-white">
-                      <th className="w-12 py-2 px-2 font-bold text-center">使う</th>
-                      <th className="w-14 py-2 px-1 font-bold text-left">No</th>
-                      <th className="py-2 px-2 font-bold text-left">項目名</th>
-                      <th className="py-2 px-2 font-bold text-left">仕様・摘要</th>
-                      <th className="w-24 py-2 px-1 font-bold text-right">数量</th>
-                      <th className="w-20 py-2 px-1 font-bold text-center">単位</th>
-                      <th className="w-28 py-2 px-1 font-bold text-right">単価</th>
-                      <th className="w-28 py-2 px-2 font-bold text-right">金額</th>
-                      <th className="w-10"></th>
-                    </tr>
-                  </thead>
+                  <thead><tr className="text-[13px] text-slate-500 border-b border-slate-100 bg-white">
+                    <th className="w-12 py-2 px-2 font-bold text-center">使う</th><th className="w-14 py-2 px-1 font-bold text-left">No</th><th className="py-2 px-2 font-bold text-left">項目名</th><th className="py-2 px-2 font-bold text-left">仕様・摘要</th><th className="w-24 py-2 px-1 font-bold text-right">数量</th><th className="w-20 py-2 px-1 font-bold text-center">単位</th><th className="w-28 py-2 px-1 font-bold text-right">単価</th><th className="w-28 py-2 px-2 font-bold text-right">金額</th><th className="w-10"></th>
+                  </tr></thead>
                   <tbody>
                     {visibleItems.map(it => (
                       <tr key={it.id} className={`border-b border-slate-50 ${it.enabled ? '' : 'bg-slate-50/60 text-slate-300'}`}>
@@ -584,7 +650,6 @@ function TabDetails({ project, est, templates, onChange, onApplyTemplate, onSave
   );
 }
 
-// ============ 合計バー ============
 function TotalBar({ est }) {
   return (
     <div className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-slate-200 shadow-[0_-2px_8px_rgba(0,0,0,0.06)] no-print z-20">
@@ -598,19 +663,17 @@ function TotalBar({ est }) {
 }
 
 // ============ 見積書プレビュー ============
-function PrintPreview({ project, est, companyInfo, onChange }) {
-  const format = project.printFormat || 'standard';
+function PrintPreview({ docHeader, est, companyInfo, onChange }) {
+  const format = docHeader.printFormat || 'standard';
   const setFormat = (f) => onChange(p => ({ ...p, printFormat: f }));
   const groups = useMemo(() => groupLines(est.lines).filter(g => g.total > 0 && g.items.some(it => it.enabled && it.amount > 0)), [est.lines]);
   const hasData = groups.length > 0;
-
   return (
     <div className="pb-10">
       <div className="bg-slate-100 rounded-xl px-4 py-3 flex justify-between items-center no-print flex-wrap gap-3 mb-4">
         <div className="flex items-center gap-3 flex-wrap">
           <span className="text-[15px] font-bold text-navy">📄 様式</span>
-          <select value={format} onChange={e => setFormat(e.target.value)}
-            className="border-2 border-slate-300 bg-white rounded-lg px-3 text-[16px] focus:outline-none focus:border-navy" style={{ minHeight: '48px' }}>
+          <select value={format} onChange={e => setFormat(e.target.value)} className="border-2 border-slate-300 bg-white rounded-lg px-3 text-[16px] focus:outline-none focus:border-navy" style={{ minHeight: '48px' }}>
             <option value="standard">① シンプル（集計のみ）</option>
             <option value="detailed">② 内訳付き（明細あり）</option>
             <option value="formal">③ 正式見積書（押印欄付き）</option>
@@ -619,257 +682,200 @@ function PrintPreview({ project, est, companyInfo, onChange }) {
         </div>
         <button onClick={() => window.print()} className="bg-cta hover:bg-ctad text-white font-bold px-5 rounded-lg" style={{ minHeight: '48px' }}>🖨 印刷 / PDF保存</button>
       </div>
-      {!companyInfo?.name && (
-        <div className="no-print bg-orange/10 border-2 border-orange/40 rounded-lg px-4 py-3 mb-4 text-[15px] text-navy">
-          💡 「⚙️ 設定」で会社名・住所などを登録すると、見積書に自動で表示されます。
-        </div>
-      )}
+      {!companyInfo?.name && <div className="no-print bg-orange/10 border-2 border-orange/40 rounded-lg px-4 py-3 mb-4 text-[15px] text-navy">💡 「⚙️ 設定」で会社名・住所などを登録すると、見積書に自動で表示されます。</div>}
       {!hasData ? (
-        <div className="bg-white border-2 border-dashed border-slate-300 rounded-xl p-10 text-center text-slate-500">
-          金額の入った項目がありません。「② 内訳明細」で数量と単価を入力してください。
-        </div>
+        <div className="bg-white border-2 border-dashed border-slate-300 rounded-xl p-10 text-center text-slate-500">金額の入った項目がありません。「② 内訳明細」で数量と単価を入力してください。</div>
       ) : (
         <>
-          {format === 'standard' && <FormatStandard project={project} est={est} companyInfo={companyInfo} groups={groups} />}
-          {format === 'detailed' && <FormatDetailed project={project} est={est} companyInfo={companyInfo} groups={groups} />}
-          {format === 'formal' && <FormatFormal project={project} est={est} companyInfo={companyInfo} groups={groups} />}
+          {format === 'standard' && <FormatStandard doc={docHeader} est={est} companyInfo={companyInfo} groups={groups} />}
+          {format === 'detailed' && <FormatDetailed doc={docHeader} est={est} companyInfo={companyInfo} groups={groups} />}
+          {format === 'formal' && <FormatFormal doc={docHeader} est={est} companyInfo={companyInfo} groups={groups} />}
         </>
       )}
     </div>
   );
 }
 
-function CompanyBlock({ companyInfo, project, withStamp }) {
+function CompanyBlock({ companyInfo, doc, withStamp }) {
   return (
     <div className="text-sm">
-      <div className="text-slate-600">発行日: {fmtDate(project.estimateDate) || fmtDate(nowISO())}</div>
+      <div className="text-slate-600">発行日: {fmtDate(doc.estimateDate) || fmtDate(nowISO())}</div>
       <div className="font-bold mt-1 text-[15px]">{companyInfo?.name || ''}</div>
       <div className="text-xs text-slate-600">{companyInfo?.address || ''}</div>
       <div className="text-xs text-slate-600">{companyInfo?.phone ? 'TEL ' + companyInfo.phone : ''}</div>
       {companyInfo?.email && <div className="text-xs text-slate-600">{companyInfo.email}</div>}
       {companyInfo?.representative && <div className="text-xs text-slate-600 mt-1">代表 {companyInfo.representative}</div>}
-      {project.staffName && <div className="text-xs text-slate-600">担当 {project.staffName}</div>}
-      {withStamp && companyInfo?.stampImage && (
-        <div className="mt-2 flex justify-end"><img src={companyInfo.stampImage} alt="印" className="h-14 w-14 object-contain" /></div>
-      )}
+      {doc.staffName && <div className="text-xs text-slate-600">担当 {doc.staffName}</div>}
+      {withStamp && companyInfo?.stampImage && <div className="mt-2 flex justify-end"><img src={companyInfo.stampImage} alt="印" className="h-14 w-14 object-contain" /></div>}
     </div>
   );
 }
-
 function SummaryTable({ groups, est, bordered }) {
-  const b = bordered ? 'border border-slate-400' : '';
-  const cell = bordered ? 'border-r border-slate-300' : '';
+  const b = bordered ? 'border border-slate-400' : ''; const cell = bordered ? 'border-r border-slate-300' : '';
   return (
     <table className={`w-full text-sm border-collapse ${b}`}>
-      <thead>
-        <tr className="bg-slate-100 border-b-2 border-slate-400">
-          <th className={`px-2 py-1.5 text-left ${cell}`}>No.</th>
-          <th className={`px-2 py-1.5 text-left ${cell}`}>工種・分類</th>
-          <th className="px-2 py-1.5 text-right">金額（円）</th>
-        </tr>
-      </thead>
+      <thead><tr className="bg-slate-100 border-b-2 border-slate-400"><th className={`px-2 py-1.5 text-left ${cell}`}>No.</th><th className={`px-2 py-1.5 text-left ${cell}`}>工種・分類</th><th className="px-2 py-1.5 text-right">金額（円）</th></tr></thead>
       <tbody>
-        {groups.map(g => (
-          <tr key={g.group} className="border-b border-slate-200">
-            <td className={`px-2 py-1.5 font-mono ${cell}`}>{g.group}</td>
-            <td className={`px-2 py-1.5 ${cell}`}>{g.categoryName}</td>
-            <td className="px-2 py-1.5 text-right num font-mono">{fmt(g.total)}</td>
-          </tr>
-        ))}
-        <tr className="border-b-2 border-slate-400 font-bold bg-slate-50">
-          <td colSpan="2" className="px-2 py-2 text-right">小計（税抜）</td>
-          <td className="px-2 py-2 text-right num font-mono">{fmt(est.subtotal)}</td>
-        </tr>
-        <tr className="border-b border-slate-300">
-          <td colSpan="2" className="px-2 py-1.5 text-right">消費税（{est.taxRate}%）</td>
-          <td className="px-2 py-1.5 text-right num font-mono">{fmt(est.tax)}</td>
-        </tr>
-        <tr className="border-b-4 border-slate-800 bg-slate-100 font-bold text-base">
-          <td colSpan="2" className="px-2 py-2 text-right">税込総合計</td>
-          <td className="px-2 py-2 text-right num font-mono">¥{fmt(est.total)}</td>
-        </tr>
+        {groups.map(g => (<tr key={g.group} className="border-b border-slate-200"><td className={`px-2 py-1.5 font-mono ${cell}`}>{g.group}</td><td className={`px-2 py-1.5 ${cell}`}>{g.categoryName}</td><td className="px-2 py-1.5 text-right num font-mono">{fmt(g.total)}</td></tr>))}
+        <tr className="border-b-2 border-slate-400 font-bold bg-slate-50"><td colSpan="2" className="px-2 py-2 text-right">小計（税抜）</td><td className="px-2 py-2 text-right num font-mono">{fmt(est.subtotal)}</td></tr>
+        <tr className="border-b border-slate-300"><td colSpan="2" className="px-2 py-1.5 text-right">消費税（{est.taxRate}%）</td><td className="px-2 py-1.5 text-right num font-mono">{fmt(est.tax)}</td></tr>
+        <tr className="border-b-4 border-slate-800 bg-slate-100 font-bold text-base"><td colSpan="2" className="px-2 py-2 text-right">税込総合計</td><td className="px-2 py-2 text-right num font-mono">¥{fmt(est.total)}</td></tr>
       </tbody>
     </table>
   );
 }
-
-function FooterNotes({ project }) {
-  return (
-    <div className="mt-6 text-xs text-slate-500 leading-relaxed">
-      <p>※ 本見積書の有効期限は{project.validUntil ? fmtDate(project.validUntil) + ' まで' : '発行日より30日間'}です。</p>
-      <p>※ 別途追加工事が発生した場合は、別途お見積もりいたします。</p>
-      <p>※ 諸条件・支払条件等は別途ご相談ください。</p>
-    </div>
-  );
+function FooterNotes({ doc }) {
+  return (<div className="mt-6 text-xs text-slate-500 leading-relaxed"><p>※ 本見積書の有効期限は{doc.validUntil ? fmtDate(doc.validUntil) + ' まで' : '発行日より30日間'}です。</p><p>※ 別途追加工事が発生した場合は、別途お見積もりいたします。</p><p>※ 諸条件・支払条件等は別途ご相談ください。</p></div>);
 }
-
-// 書式① シンプル
-function FormatStandard({ project, est, companyInfo, groups }) {
+function FormatStandard({ doc, est, companyInfo, groups }) {
   return (
     <div className="bg-white p-8 shadow-inner border border-slate-200 rounded-lg" style={{ color: '#1B2B4B' }}>
       <div className="text-center mb-8"><h1 className="text-3xl font-bold tracking-widest">御 見 積 書</h1></div>
       <div className="grid grid-cols-2 gap-8 mb-8">
-        <div>
-          <div className="text-lg font-bold border-b border-slate-400 pb-2">{project.clientName ? `${cleanClientName(project.clientName)} 様` : '○○○○ 様'}</div>
-          <div className="text-sm text-slate-600 mt-3">
-            <div>工事名: {project.name || '—'}</div>
-            {project.workType && <div>工事種別: {project.workType}</div>}
-            {project.siteAddress && <div>現場: {project.siteAddress}</div>}
-            <div className="mt-1">下記の通りお見積もり申し上げます。</div>
-          </div>
+        <div><div className="text-lg font-bold border-b border-slate-400 pb-2">{doc.clientName ? `${cleanClientName(doc.clientName)} 様` : '○○○○ 様'}</div>
+          <div className="text-sm text-slate-600 mt-3"><div>工事名: {doc.name || '—'}</div>{doc.workType && <div>工事種別: {doc.workType}</div>}{doc.siteAddress && <div>現場: {doc.siteAddress}</div>}<div className="mt-1">下記の通りお見積もり申し上げます。</div></div>
         </div>
-        <div className="text-right"><CompanyBlock companyInfo={companyInfo} project={project} withStamp /></div>
+        <div className="text-right"><CompanyBlock companyInfo={companyInfo} doc={doc} withStamp /></div>
       </div>
-      <div className="border-2 border-slate-800 p-4 mb-6 flex items-center justify-between">
-        <span className="text-lg font-bold">税込総額</span>
-        <div className="text-right">
-          <span className="num text-3xl font-bold">¥{fmt(est.total)}</span>
-          <span className="text-sm text-slate-500 ml-2">（{fmt(est.subtotal)} + 消費税 {fmt(est.tax)}）</span>
-        </div>
-      </div>
-      <h3 className="font-bold text-lg mb-2">工事内訳</h3>
-      <SummaryTable groups={groups} est={est} />
-      <FooterNotes project={project} />
+      <div className="border-2 border-slate-800 p-4 mb-6 flex items-center justify-between"><span className="text-lg font-bold">税込総額</span><div className="text-right"><span className="num text-3xl font-bold">¥{fmt(est.total)}</span><span className="text-sm text-slate-500 ml-2">（{fmt(est.subtotal)} + 消費税 {fmt(est.tax)}）</span></div></div>
+      <h3 className="font-bold text-lg mb-2">工事内訳</h3><SummaryTable groups={groups} est={est} /><FooterNotes doc={doc} />
     </div>
   );
 }
-
-// 書式② 内訳付き
-function FormatDetailed({ project, est, companyInfo, groups }) {
+function FormatDetailed({ doc, est, companyInfo, groups }) {
   return (
     <div className="bg-white p-8 shadow-inner border border-slate-200 rounded-lg" style={{ color: '#1B2B4B' }}>
       <div className="text-center mb-6"><h1 className="text-3xl font-bold tracking-widest">御 見 積 書</h1><div className="text-sm text-slate-500 mt-1">（明細付き）</div></div>
       <div className="grid grid-cols-2 gap-8 mb-6">
-        <div>
-          <div className="text-lg font-bold border-b border-slate-400 pb-2">{project.clientName ? `${cleanClientName(project.clientName)} 様` : '○○○○ 様'}</div>
-          <div className="text-sm text-slate-600 mt-3">
-            <div>工事名: {project.name || '—'}</div>
-            {project.workType && <div>工事種別: {project.workType}</div>}
-            {project.siteAddress && <div>現場: {project.siteAddress}</div>}
-          </div>
-        </div>
-        <div className="text-right"><CompanyBlock companyInfo={companyInfo} project={project} withStamp /></div>
+        <div><div className="text-lg font-bold border-b border-slate-400 pb-2">{doc.clientName ? `${cleanClientName(doc.clientName)} 様` : '○○○○ 様'}</div><div className="text-sm text-slate-600 mt-3"><div>工事名: {doc.name || '—'}</div>{doc.workType && <div>工事種別: {doc.workType}</div>}{doc.siteAddress && <div>現場: {doc.siteAddress}</div>}</div></div>
+        <div className="text-right"><CompanyBlock companyInfo={companyInfo} doc={doc} withStamp /></div>
       </div>
-      <div className="border-2 border-slate-800 p-3 mb-6 flex items-center justify-between">
-        <span className="text-base font-bold">税込総額</span>
-        <span className="num text-2xl font-bold">¥{fmt(est.total)}</span>
-      </div>
-      <h3 className="font-bold text-base mb-2">工種別 集計</h3>
-      <SummaryTable groups={groups} est={est} />
-      <div className="print-page-break"></div>
-      <h3 className="font-bold text-base mt-6 mb-2">内訳明細</h3>
+      <div className="border-2 border-slate-800 p-3 mb-6 flex items-center justify-between"><span className="text-base font-bold">税込総額</span><span className="num text-2xl font-bold">¥{fmt(est.total)}</span></div>
+      <h3 className="font-bold text-base mb-2">工種別 集計</h3><SummaryTable groups={groups} est={est} />
+      <div className="print-page-break"></div><h3 className="font-bold text-base mt-6 mb-2">内訳明細</h3>
       {groups.map(g => (
         <div key={g.group} className="mb-4 print-avoid-break">
           <div className="font-bold bg-slate-200 px-2 py-1 text-sm">{g.group}. {g.categoryName}（小計 {fmt(g.total)} 円）</div>
           <table className="w-full text-xs border-collapse" style={{ tableLayout: 'fixed' }}>
             <colgroup><col style={{ width: '52px' }} /><col /><col /><col style={{ width: '72px' }} /><col style={{ width: '44px' }} /><col style={{ width: '88px' }} /><col style={{ width: '96px' }} /></colgroup>
-            <thead><tr className="bg-slate-100 border-b border-slate-300">
-              <th className="px-2 py-1 text-left">No.</th><th className="px-2 py-1 text-left">項目名</th><th className="px-2 py-1 text-left">仕様・摘要</th>
-              <th className="px-2 py-1 text-right">数量</th><th className="px-2 py-1 text-left">単位</th><th className="px-2 py-1 text-right">単価</th><th className="px-2 py-1 text-right">金額</th>
-            </tr></thead>
-            <tbody>
-              {g.items.filter(it => it.enabled && it.amount > 0).map(it => (
-                <tr key={it.id} className="border-b border-slate-100">
-                  <td className="px-2 py-1 font-mono">{it.displayNo}</td>
-                  <td className="px-2 py-1 truncate" title={it.name}>{it.name}</td>
-                  <td className="px-2 py-1 text-slate-600 truncate" title={it.spec}>{it.spec}</td>
-                  <td className="px-2 py-1 text-right num font-mono">{it.qtyNum != null ? (it.qtyNum % 1 === 0 ? it.qtyNum : it.qtyNum.toFixed(2)) : ''}</td>
-                  <td className="px-2 py-1">{it.unit}</td>
-                  <td className="px-2 py-1 text-right num font-mono">{fmt(it.priceNum)}</td>
-                  <td className="px-2 py-1 text-right num font-mono font-semibold">{fmt(it.amount)}</td>
-                </tr>
-              ))}
-            </tbody>
+            <thead><tr className="bg-slate-100 border-b border-slate-300"><th className="px-2 py-1 text-left">No.</th><th className="px-2 py-1 text-left">項目名</th><th className="px-2 py-1 text-left">仕様・摘要</th><th className="px-2 py-1 text-right">数量</th><th className="px-2 py-1 text-left">単位</th><th className="px-2 py-1 text-right">単価</th><th className="px-2 py-1 text-right">金額</th></tr></thead>
+            <tbody>{g.items.filter(it => it.enabled && it.amount > 0).map(it => (<tr key={it.id} className="border-b border-slate-100"><td className="px-2 py-1 font-mono">{it.displayNo}</td><td className="px-2 py-1 truncate" title={it.name}>{it.name}</td><td className="px-2 py-1 text-slate-600 truncate" title={it.spec}>{it.spec}</td><td className="px-2 py-1 text-right num font-mono">{it.qtyNum != null ? (it.qtyNum % 1 === 0 ? it.qtyNum : it.qtyNum.toFixed(2)) : ''}</td><td className="px-2 py-1">{it.unit}</td><td className="px-2 py-1 text-right num font-mono">{fmt(it.priceNum)}</td><td className="px-2 py-1 text-right num font-mono font-semibold">{fmt(it.amount)}</td></tr>))}</tbody>
           </table>
         </div>
       ))}
-      <FooterNotes project={project} />
+      <FooterNotes doc={doc} />
     </div>
   );
 }
-
-// 書式③ 正式見積書（押印・罫線多め）
-function FormatFormal({ project, est, companyInfo, groups }) {
+function FormatFormal({ doc, est, companyInfo, groups }) {
   return (
     <div className="bg-white p-8 shadow-inner border border-slate-200 rounded-lg" style={{ color: '#1B2B4B' }}>
-      <div className="text-center mb-8">
-        <h1 className="text-4xl font-bold tracking-widest border-b-4 border-slate-800 inline-block pb-2 px-8">御 見 積 書</h1>
-        <div className="text-sm text-slate-600 mt-3">No. {project.id.slice(-8).toUpperCase()}</div>
-      </div>
+      <div className="text-center mb-8"><h1 className="text-4xl font-bold tracking-widest border-b-4 border-slate-800 inline-block pb-2 px-8">御 見 積 書</h1><div className="text-sm text-slate-600 mt-3">No. {doc.id.slice(-8).toUpperCase()}</div></div>
       <div className="grid grid-cols-[1fr_auto] gap-8 mb-6">
-        <div className="border border-slate-400 p-4">
-          <div className="text-base font-bold mb-3">{project.clientName ? cleanClientName(project.clientName) : '○○○○'} <span className="text-sm">様</span></div>
+        <div className="border border-slate-400 p-4"><div className="text-base font-bold mb-3">{doc.clientName ? cleanClientName(doc.clientName) : '○○○○'} <span className="text-sm">様</span></div>
           <table className="w-full text-sm"><tbody>
-            <tr className="border-t border-slate-200"><td className="py-1.5 text-slate-600 w-24">件名</td><td className="py-1.5">{project.name || '—'}</td></tr>
-            <tr className="border-t border-slate-200"><td className="py-1.5 text-slate-600">工事種別</td><td className="py-1.5">{project.workType || '—'}</td></tr>
-            <tr className="border-t border-slate-200"><td className="py-1.5 text-slate-600">工事場所</td><td className="py-1.5">{project.siteAddress || '—'}</td></tr>
-            <tr className="border-t border-slate-200"><td className="py-1.5 text-slate-600">有効期限</td><td className="py-1.5">{project.validUntil ? fmtDate(project.validUntil) + ' まで' : '発行日より30日'}</td></tr>
+            <tr className="border-t border-slate-200"><td className="py-1.5 text-slate-600 w-24">件名</td><td className="py-1.5">{doc.name || '—'}</td></tr>
+            <tr className="border-t border-slate-200"><td className="py-1.5 text-slate-600">工事種別</td><td className="py-1.5">{doc.workType || '—'}</td></tr>
+            <tr className="border-t border-slate-200"><td className="py-1.5 text-slate-600">工事場所</td><td className="py-1.5">{doc.siteAddress || '—'}</td></tr>
+            <tr className="border-t border-slate-200"><td className="py-1.5 text-slate-600">有効期限</td><td className="py-1.5">{doc.validUntil ? fmtDate(doc.validUntil) + ' まで' : '発行日より30日'}</td></tr>
           </tbody></table>
         </div>
-        <div>
-          <div className="text-sm text-slate-600 text-right mb-3">発行日: {fmtDate(project.estimateDate) || fmtDate(nowISO())}</div>
-          <div className="border border-slate-400 p-3 text-sm">
-            <div className="font-bold text-base">{companyInfo?.name || ''}</div>
-            <div className="text-xs text-slate-600 mt-1">{companyInfo?.address || ''}</div>
-            <div className="text-xs text-slate-600">{companyInfo?.phone ? 'TEL ' + companyInfo.phone : ''}</div>
-            {companyInfo?.email && <div className="text-xs text-slate-600">{companyInfo.email}</div>}
-            <div className="text-xs text-slate-600 mt-2">代表 {companyInfo?.representative || ''}</div>
-            <div className="text-xs text-slate-600">担当 {project.staffName || ''}</div>
-            <div className="mt-3 flex items-center justify-end">
-              {companyInfo?.stampImage
-                ? <img src={companyInfo.stampImage} alt="印" className="h-16 w-16 object-contain" />
-                : <div className="inline-block border-2 border-red-700 text-red-700 px-3 py-2 rounded font-bold text-xs">印</div>}
-            </div>
+        <div><div className="text-sm text-slate-600 text-right mb-3">発行日: {fmtDate(doc.estimateDate) || fmtDate(nowISO())}</div>
+          <div className="border border-slate-400 p-3 text-sm"><div className="font-bold text-base">{companyInfo?.name || ''}</div><div className="text-xs text-slate-600 mt-1">{companyInfo?.address || ''}</div><div className="text-xs text-slate-600">{companyInfo?.phone ? 'TEL ' + companyInfo.phone : ''}</div>{companyInfo?.email && <div className="text-xs text-slate-600">{companyInfo.email}</div>}<div className="text-xs text-slate-600 mt-2">代表 {companyInfo?.representative || ''}</div><div className="text-xs text-slate-600">担当 {doc.staffName || ''}</div>
+            <div className="mt-3 flex items-center justify-end">{companyInfo?.stampImage ? <img src={companyInfo.stampImage} alt="印" className="h-16 w-16 object-contain" /> : <div className="inline-block border-2 border-red-700 text-red-700 px-3 py-2 rounded font-bold text-xs">印</div>}</div>
           </div>
         </div>
       </div>
-      <div className="border-4 border-double border-slate-800 p-4 mb-6 text-center">
-        <div className="text-sm text-slate-600 mb-1">下記の通りお見積もり申し上げます</div>
-        <div className="num text-4xl font-bold tracking-wider mt-2">¥ {fmt(est.total)} <span className="text-base text-slate-600">（税込）</span></div>
-        <div className="text-xs text-slate-500 mt-2">（うち消費税 {fmt(est.tax)} 円）</div>
-      </div>
+      <div className="border-4 border-double border-slate-800 p-4 mb-6 text-center"><div className="text-sm text-slate-600 mb-1">下記の通りお見積もり申し上げます</div><div className="num text-4xl font-bold tracking-wider mt-2">¥ {fmt(est.total)} <span className="text-base text-slate-600">（税込）</span></div><div className="text-xs text-slate-500 mt-2">（うち消費税 {fmt(est.tax)} 円）</div></div>
       <SummaryTable groups={groups} est={est} bordered />
-      <div className="mt-6 grid grid-cols-2 gap-4 text-xs">
-        <div className="border border-slate-300 p-2"><div className="font-bold mb-1">お支払条件</div><div className="text-slate-600">別途ご相談ください</div></div>
-        <div className="border border-slate-300 p-2"><div className="font-bold mb-1">工期</div><div className="text-slate-600">別途ご相談ください</div></div>
-      </div>
-      <FooterNotes project={project} />
+      <div className="mt-6 grid grid-cols-2 gap-4 text-xs"><div className="border border-slate-300 p-2"><div className="font-bold mb-1">お支払条件</div><div className="text-slate-600">別途ご相談ください</div></div><div className="border border-slate-300 p-2"><div className="font-bold mb-1">工期</div><div className="text-slate-600">別途ご相談ください</div></div></div>
+      <FooterNotes doc={doc} />
     </div>
   );
 }
 
-// ============ テンプレート一覧 ============
+// ============ 請求書 ============
+function InvoiceView({ invoice, property, companyInfo, onChange, onDelete, onBack }) {
+  if (!invoice) return <div className="text-slate-500">請求書が見つかりません。<button onClick={onBack} className="text-navy underline ml-2">戻る</button></div>;
+  const groups = useMemo(() => {
+    const r = computeEstimate(invoice);
+    return groupLines(r.lines).filter(g => g.total > 0 && g.items.some(it => it.enabled && it.amount > 0));
+  }, [invoice.lines, invoice.taxRate]);
+  const est = { subtotal: invoice.subtotal, tax: invoice.tax, total: invoice.total, taxRate: invoice.taxRate };
+  const set = (key) => (e) => { const v = e.target.value; onChange(iv => ({ ...iv, [key]: v })); };
+  const bank = companyInfo || {};
+  const hasBank = bank.bankName || bank.accountNumber;
+  return (
+    <div className="pb-10">
+      <div className="flex items-center gap-3 mb-4 flex-wrap no-print">
+        <button onClick={onBack} className="bg-white border-2 border-navy text-navy font-bold px-4 rounded-lg hover:bg-slate-50" style={{ minHeight: '44px' }}>← 物件へ</button>
+        <h1 className="text-xl font-bold text-navy flex-1 min-w-0">請求書 No.{invoice.invoiceNo}</h1>
+        <button onClick={() => window.print()} className="bg-cta hover:bg-ctad text-white font-bold px-5 rounded-lg" style={{ minHeight: '48px' }}>🖨 印刷 / PDF保存</button>
+      </div>
+      <div className="bg-slate-100 rounded-xl p-4 mb-4 no-print grid sm:grid-cols-3 gap-4">
+        <Field label="請求書番号"><input className={inputCls} value={invoice.invoiceNo} onChange={set('invoiceNo')} /></Field>
+        <Field label="請求日"><input type="date" className={inputCls} value={invoice.invoiceDate} onChange={set('invoiceDate')} /></Field>
+        <Field label="支払期限"><input type="date" className={inputCls} value={invoice.dueDate} onChange={set('dueDate')} /></Field>
+        <div className="sm:col-span-3"><Field label="備考（請求書に表示）"><textarea className={inputCls + ' h-16 resize-none'} value={invoice.note} onChange={set('note')} /></Field></div>
+      </div>
+      {!hasBank && <div className="no-print bg-orange/10 border-2 border-orange/40 rounded-lg px-4 py-3 mb-4 text-[15px] text-navy">💡 「⚙️ 設定」で振込先（銀行口座）を登録すると、請求書に自動で表示されます。</div>}
+
+      {/* 請求書 本体 */}
+      <div className="bg-white p-8 shadow-inner border border-slate-200 rounded-lg" style={{ color: '#1B2B4B' }}>
+        <div className="text-center mb-8"><h1 className="text-4xl font-bold tracking-widest border-b-4 border-slate-800 inline-block pb-2 px-8">御 請 求 書</h1></div>
+        <div className="grid grid-cols-2 gap-8 mb-6">
+          <div>
+            <div className="text-lg font-bold border-b border-slate-400 pb-2">{property?.clientName ? `${cleanClientName(property.clientName)} 様` : '○○○○ 様'}</div>
+            <div className="text-sm text-slate-600 mt-3"><div>件名: {invoice.sourceName || '—'}</div>{invoice.workType && <div>工事種別: {invoice.workType}</div>}{property?.siteAddress && <div>工事場所: {property.siteAddress}</div>}</div>
+          </div>
+          <div className="text-right text-sm">
+            <div className="text-slate-600">請求日: {fmtDate(invoice.invoiceDate)}</div>
+            <div className="text-slate-600">請求書No: {invoice.invoiceNo}</div>
+            <div className="font-bold mt-2 text-[15px]">{companyInfo?.name || ''}</div>
+            <div className="text-xs text-slate-600">{companyInfo?.address || ''}</div>
+            <div className="text-xs text-slate-600">{companyInfo?.phone ? 'TEL ' + companyInfo.phone : ''}</div>
+            {companyInfo?.representative && <div className="text-xs text-slate-600 mt-1">代表 {companyInfo.representative}</div>}
+            {companyInfo?.stampImage && <div className="mt-2 flex justify-end"><img src={companyInfo.stampImage} alt="印" className="h-14 w-14 object-contain" /></div>}
+          </div>
+        </div>
+        <div className="border-4 border-double border-slate-800 p-4 mb-6 text-center">
+          <div className="text-sm text-slate-600 mb-1">下記の通りご請求申し上げます</div>
+          <div className="num text-4xl font-bold tracking-wider mt-2">¥ {fmt(invoice.total)} <span className="text-base text-slate-600">（税込）</span></div>
+          <div className="text-xs text-slate-500 mt-2">（うち消費税 {fmt(invoice.tax)} 円）{invoice.dueDate && <span className="ml-3">お支払期限: {fmtDate(invoice.dueDate)}</span>}</div>
+        </div>
+        <SummaryTable groups={groups} est={est} bordered />
+        {hasBank && (
+          <div className="mt-6 border border-slate-300 p-3 text-sm">
+            <div className="font-bold mb-1">お振込先</div>
+            <div className="text-slate-700">{bank.bankName} {bank.bankBranch} ／ {bank.accountType || '普通'} {bank.accountNumber}</div>
+            <div className="text-slate-700">名義: {bank.accountHolder}</div>
+          </div>
+        )}
+        {invoice.note && <div className="mt-4 text-sm text-slate-600 whitespace-pre-line">{invoice.note}</div>}
+        <div className="mt-6 text-xs text-slate-500">※ 振込手数料は貴社にてご負担くださいますようお願い申し上げます。</div>
+      </div>
+
+      <div className="mt-6 no-print"><a href="#" onClick={e => { e.preventDefault(); onDelete(); }} className="text-danger underline font-bold text-[14px]">この請求書を削除する</a></div>
+    </div>
+  );
+}
+
+// ============ テンプレート ============
 function TemplateList({ templates, onOpen, onAdd, onAddSample, onDuplicate, onDelete }) {
   return (
     <div>
-      <div className="flex items-center justify-between mb-2 flex-wrap gap-3">
-        <h1 className="text-2xl font-bold text-navy">テンプレート</h1>
-        <button onClick={onAdd} className="bg-cta hover:bg-ctad text-white font-bold px-6 rounded-lg" style={{ minHeight: '56px' }}>＋ 新しいテンプレート</button>
-      </div>
+      <div className="flex items-center justify-between mb-2 flex-wrap gap-3"><h1 className="text-2xl font-bold text-navy">テンプレート</h1><button onClick={onAdd} className="bg-cta hover:bg-ctad text-white font-bold px-6 rounded-lg" style={{ minHeight: '56px' }}>＋ 新しいテンプレート</button></div>
       <p className="text-[15px] text-slate-600 mb-5">よく使うカテゴリ・項目のセット（単価込みで可）を登録しておくと、見積を作るときにワンタッチで読み込めます。</p>
       {templates.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16 text-center bg-white border-2 border-dashed border-slate-300 rounded-xl">
-          <div className="text-6xl mb-4" aria-hidden="true">📋</div>
-          <h2 className="text-xl font-bold text-navy mb-2">テンプレートがありません</h2>
-          <p className="text-slate-600 mb-6 text-[16px]">サンプルから始めるか、自分で新しく作れます。</p>
-          <button onClick={onAddSample} className="bg-cta hover:bg-ctad text-white font-bold px-6 rounded-lg" style={{ minHeight: '56px' }}>💡 サンプルテンプレートを入れてみる</button>
-        </div>
+        <div className="flex flex-col items-center justify-center py-16 text-center bg-white border-2 border-dashed border-slate-300 rounded-xl"><div className="text-6xl mb-4" aria-hidden="true">📋</div><h2 className="text-xl font-bold text-navy mb-2">テンプレートがありません</h2><p className="text-slate-600 mb-6 text-[16px]">サンプルから始めるか、自分で新しく作れます。</p><button onClick={onAddSample} className="bg-cta hover:bg-ctad text-white font-bold px-6 rounded-lg" style={{ minHeight: '56px' }}>💡 サンプルテンプレートを入れてみる</button></div>
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {templates.map(t => {
-            const catCount = (t.categories || []).length;
-            const itemCount = (t.categories || []).reduce((s, c) => s + (c.items || []).length, 0);
+            const catCount = (t.categories || []).length; const itemCount = (t.categories || []).reduce((s, c) => s + (c.items || []).length, 0);
             return (
               <div key={t.id} className="bg-white border-2 border-slate-200 rounded-xl p-4 hover:border-navy/40 transition">
-                <button onClick={() => onOpen(t.id)} className="text-left w-full">
-                  <div className="font-bold text-navy truncate text-[17px]">{t.name || '（無題）'}</div>
-                  <div className="text-[14px] text-slate-500 mt-1">{catCount}カテゴリ / {itemCount}項目</div>
-                </button>
-                <div className="flex gap-3 mt-3 pt-3 border-t border-slate-100 items-center text-[14px]">
-                  <button onClick={() => onOpen(t.id)} className="font-bold text-navy hover:underline">編集</button>
-                  <button onClick={() => onDuplicate(t.id)} className="text-slate-600 hover:text-navy">複製</button>
-                  <button onClick={() => onDelete(t.id)} className="text-danger underline ml-auto">削除</button>
-                </div>
+                <button onClick={() => onOpen(t.id)} className="text-left w-full"><div className="font-bold text-navy truncate text-[17px]">{t.name || '（無題）'}</div><div className="text-[14px] text-slate-500 mt-1">{catCount}カテゴリ / {itemCount}項目</div></button>
+                <div className="flex gap-3 mt-3 pt-3 border-t border-slate-100 items-center text-[14px]"><button onClick={() => onOpen(t.id)} className="font-bold text-navy hover:underline">編集</button><button onClick={() => onDuplicate(t.id)} className="text-slate-600 hover:text-navy">複製</button><button onClick={() => onDelete(t.id)} className="text-danger underline ml-auto">削除</button></div>
               </div>
             );
           })}
@@ -878,55 +884,35 @@ function TemplateList({ templates, onOpen, onAdd, onAddSample, onDuplicate, onDe
     </div>
   );
 }
-
-// ============ テンプレート編集 ============
 function TemplateEditor({ template, onChange, onBack }) {
   const ui = useUI();
   if (!template) return <div className="text-slate-500">テンプレートが見つかりません。<button onClick={onBack} className="text-navy underline ml-2">一覧へ戻る</button></div>;
   const cats = template.categories || [];
-
-  const addCategory = async () => { const name = await ui.prompt({ title: 'カテゴリを追加', defaultValue: '', placeholder: '例）内装工事' }); if (!name) return; onChange(t => ({ ...t, categories: [...(t.categories || []), { name, items: [] }] })); };
+  const addCategory = async () => { const name = await ui.prompt({ title: 'カテゴリを追加', placeholder: '例）内装工事' }); if (!name) return; onChange(t => ({ ...t, categories: [...(t.categories || []), { name, items: [] }] })); };
   const renameCategory = async (ci, current) => { const name = await ui.prompt({ title: 'カテゴリ名を変更', defaultValue: current }); if (!name) return; onChange(t => ({ ...t, categories: t.categories.map((c, i) => i === ci ? { ...c, name } : c) })); };
   const deleteCategory = async (ci, name) => { const ok = await ui.confirm({ title: 'カテゴリを削除しますか？', message: `「${name}」を削除します。元に戻せません。`, danger: true, confirmLabel: '🗑 削除する' }); if (ok) onChange(t => ({ ...t, categories: t.categories.filter((_, i) => i !== ci) })); };
   const addItem = (ci) => onChange(t => ({ ...t, categories: t.categories.map((c, i) => i === ci ? { ...c, items: [...c.items, { name: '', spec: '', unit: '式', price: '' }] } : c) }));
   const updateItem = (ci, ii, patch) => onChange(t => ({ ...t, categories: t.categories.map((c, i) => i === ci ? { ...c, items: c.items.map((it, j) => j === ii ? { ...it, ...patch } : it) } : c) }));
   const deleteItem = (ci, ii) => onChange(t => ({ ...t, categories: t.categories.map((c, i) => i === ci ? { ...c, items: c.items.filter((_, j) => j !== ii) } : c) }));
-
   return (
     <div>
-      <div className="flex items-center gap-3 mb-4 flex-wrap">
-        <button onClick={onBack} className="bg-white border-2 border-navy text-navy font-bold px-4 rounded-lg hover:bg-slate-50" style={{ minHeight: '44px' }}>← テンプレート一覧</button>
-        <input value={template.name} onChange={e => onChange(t => ({ ...t, name: e.target.value }))}
-          className="text-xl font-bold text-navy bg-transparent border-b-2 border-transparent hover:border-slate-300 focus:border-navy focus:outline-none flex-1 min-w-0" placeholder="テンプレート名" />
-      </div>
+      <div className="flex items-center gap-3 mb-4 flex-wrap"><button onClick={onBack} className="bg-white border-2 border-navy text-navy font-bold px-4 rounded-lg hover:bg-slate-50" style={{ minHeight: '44px' }}>← テンプレート一覧</button><input value={template.name} onChange={e => onChange(t => ({ ...t, name: e.target.value }))} className="text-xl font-bold text-navy bg-transparent border-b-2 border-transparent hover:border-slate-300 focus:border-navy focus:outline-none flex-1 min-w-0" placeholder="テンプレート名" /></div>
       <p className="text-[15px] text-slate-600 mb-4">カテゴリ・項目（単価を入れておけば標準単価として）が、見積作成時に読み込まれます。数量は見積ごとに入力します。</p>
       <datalist id="unit-options-tpl">{UNIT_OPTIONS.map(u => <option key={u} value={u} />)}</datalist>
       <div className="space-y-4">
         {cats.map((c, ci) => (
           <div key={ci} className="bg-white border-2 border-slate-200 rounded-xl overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-3 bg-slate-50 border-b-2 border-slate-200">
-              <button onClick={() => renameCategory(ci, c.name)} className="font-bold text-navy text-[17px] hover:underline truncate text-left">{c.name || '（カテゴリ名なし）'}</button>
-              <button onClick={() => deleteCategory(ci, c.name)} className="text-danger underline text-[13px]">カテゴリ削除</button>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-[16px]" style={{ minWidth: '560px' }}>
-                <thead><tr className="text-[13px] text-slate-500 border-b border-slate-100">
-                  <th className="py-2 px-2 font-bold text-left">項目名</th><th className="py-2 px-2 font-bold text-left">仕様・摘要</th>
-                  <th className="w-20 py-2 px-1 font-bold text-center">単位</th><th className="w-32 py-2 px-1 font-bold text-right">標準単価（任意）</th><th className="w-10"></th>
-                </tr></thead>
-                <tbody>
-                  {c.items.map((it, ii) => (
-                    <tr key={ii} className="border-b border-slate-50">
-                      <td className="px-1"><input value={it.name} onChange={e => updateItem(ci, ii, { name: e.target.value })} placeholder="項目名" className={cellInputCls + ' min-w-[140px]'} /></td>
-                      <td className="px-1"><input value={it.spec} onChange={e => updateItem(ci, ii, { spec: e.target.value })} placeholder="—" className={cellInputCls + ' min-w-[120px] text-slate-600'} /></td>
-                      <td className="px-1"><input list="unit-options-tpl" value={it.unit} onChange={e => updateItem(ci, ii, { unit: e.target.value })} className={cellInputCls + ' text-center'} /></td>
-                      <td className="px-1"><input type="number" inputMode="numeric" value={it.price} onChange={e => updateItem(ci, ii, { price: e.target.value })} placeholder="—" className={cellInputCls + ' text-right num'} /></td>
-                      <td className="px-1 text-center"><button onClick={() => deleteItem(ci, ii)} aria-label="この項目を削除" className="text-slate-300 hover:text-danger text-lg w-8 h-8">✕</button></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <div className="flex items-center justify-between px-4 py-3 bg-slate-50 border-b-2 border-slate-200"><button onClick={() => renameCategory(ci, c.name)} className="font-bold text-navy text-[17px] hover:underline truncate text-left">{c.name || '（カテゴリ名なし）'}</button><button onClick={() => deleteCategory(ci, c.name)} className="text-danger underline text-[13px]">カテゴリ削除</button></div>
+            <div className="overflow-x-auto"><table className="w-full text-[16px]" style={{ minWidth: '560px' }}>
+              <thead><tr className="text-[13px] text-slate-500 border-b border-slate-100"><th className="py-2 px-2 font-bold text-left">項目名</th><th className="py-2 px-2 font-bold text-left">仕様・摘要</th><th className="w-20 py-2 px-1 font-bold text-center">単位</th><th className="w-32 py-2 px-1 font-bold text-right">標準単価（任意）</th><th className="w-10"></th></tr></thead>
+              <tbody>{c.items.map((it, ii) => (<tr key={ii} className="border-b border-slate-50">
+                <td className="px-1"><input value={it.name} onChange={e => updateItem(ci, ii, { name: e.target.value })} placeholder="項目名" className={cellInputCls + ' min-w-[140px]'} /></td>
+                <td className="px-1"><input value={it.spec} onChange={e => updateItem(ci, ii, { spec: e.target.value })} placeholder="—" className={cellInputCls + ' min-w-[120px] text-slate-600'} /></td>
+                <td className="px-1"><input list="unit-options-tpl" value={it.unit} onChange={e => updateItem(ci, ii, { unit: e.target.value })} className={cellInputCls + ' text-center'} /></td>
+                <td className="px-1"><input type="number" inputMode="numeric" value={it.price} onChange={e => updateItem(ci, ii, { price: e.target.value })} placeholder="—" className={cellInputCls + ' text-right num'} /></td>
+                <td className="px-1 text-center"><button onClick={() => deleteItem(ci, ii)} aria-label="この項目を削除" className="text-slate-300 hover:text-danger text-lg w-8 h-8">✕</button></td>
+              </tr>))}</tbody>
+            </table></div>
             <div className="px-4 py-3 border-t border-slate-100"><button onClick={() => addItem(ci)} className="text-navy font-bold hover:underline text-[15px]">＋ 項目を追加</button></div>
           </div>
         ))}
@@ -940,40 +926,31 @@ function TemplateEditor({ template, onChange, onBack }) {
 function Settings({ state, setState }) {
   const ui = useUI();
   const setCompany = (key, val) => setState(s => ({ ...s, companyInfo: { ...s.companyInfo, [key]: val } }));
-
-  const exportAll = () => downloadJson({ ...state, _exportedAt: nowISO(), _version: 'general-v1' }, `見積データ_全体_${todayISO()}.json`);
-  const exportProject = (pid) => {
-    const p = state.projects.find(x => x.id === pid); if (!p) return;
-    downloadJson({ project: p, companyInfo: state.companyInfo, _exportedAt: nowISO(), _version: 'general-v1' }, `見積_${p.name || '無題'}_${todayISO()}.json`);
-  };
+  const exportAll = () => downloadJson({ ...state, _exportedAt: nowISO(), _version: 'general-v2' }, `見積データ_全体_${todayISO()}.json`);
   const importAll = async (e) => {
     const file = e.target.files[0]; if (!file) return;
     const reader = new FileReader();
     reader.onload = async (ev) => {
       try {
         const obj = JSON.parse(ev.target.result);
-        if (obj.project && !obj.projects) {
-          const ok = await ui.confirm({ title: '見積を取り込みますか？', message: `「${obj.project.name || '無題'}」を一覧に追加します。`, confirmLabel: '取り込む' });
-          if (!ok) return;
-          const p = { ...obj.project, id: uuid(), name: (obj.project.name || '無題') + '（取込）', updatedAt: nowISO() };
-          setState(s => ({ ...s, projects: [p, ...s.projects] }));
+        if (!obj.properties && !obj.estimates && !obj.projects) throw new Error('対応していないファイルです');
+        const ok = await ui.confirm({ title: '全データを上書きしますか？', message: '現在の物件・見積・請求書・テンプレート・会社情報がファイルの内容で置き換わります。元に戻せません。', danger: true, confirmLabel: '上書きする' });
+        if (!ok) return;
+        if (obj.projects && !obj.properties) {
+          // 旧v1形式の取り込み（移行）
+          const props = []; const ests = [];
+          obj.projects.forEach(p => { const pr = { id: uuid(), name: p.name || '無題の物件', clientName: p.clientName || '', siteAddress: p.siteAddress || '', memo: '', createdAt: nowISO(), updatedAt: nowISO() }; props.push(pr); ests.push({ id: uuid(), propertyId: pr.id, name: p.name || '見積', workType: p.workType || '', staffName: p.staffName || '', estimateDate: p.estimateDate || todayISO(), validUntil: p.validUntil || '', memo: p.memo || '', taxRate: p.taxRate ?? 10, printFormat: 'standard', status: 'draft', confirmedAt: null, lines: p.lines || [], createdAt: nowISO(), updatedAt: nowISO() }); });
+          setState(s => ({ properties: props, estimates: ests, invoices: [], templates: obj.templates || s.templates, companyInfo: { ...emptyCompany(), ...(obj.companyInfo || {}) } }));
         } else {
-          const ok = await ui.confirm({ title: '全データを上書きしますか？', message: '現在の見積・テンプレート・会社情報がファイルの内容で置き換わります。元に戻せません。', danger: true, confirmLabel: '上書きする' });
-          if (!ok) return;
-          setState(s => ({
-            projects: obj.projects || [],
-            templates: obj.templates || s.templates,
-            companyInfo: obj.companyInfo || s.companyInfo,
-          }));
+          setState(s => ({ properties: obj.properties || [], estimates: obj.estimates || [], invoices: obj.invoices || [], templates: obj.templates || s.templates, companyInfo: { ...emptyCompany(), ...(obj.companyInfo || {}) } }));
         }
         await ui.confirm({ title: '取り込みました', confirmLabel: 'OK' });
       } catch (err) { await ui.confirm({ title: '読み込みに失敗しました', message: 'ファイルの形式をご確認ください。\n' + err.message, confirmLabel: 'OK' }); }
     };
-    reader.readAsText(file);
-    e.target.value = '';
+    reader.readAsText(file); e.target.value = '';
   };
   const resetAll = async () => {
-    const ok1 = await ui.confirm({ title: 'すべてのデータを初期化しますか？', message: '見積・テンプレート・会社情報をすべて削除します。先にバックアップ（エクスポート）をおすすめします。', danger: true, confirmLabel: '次へ' });
+    const ok1 = await ui.confirm({ title: 'すべてのデータを初期化しますか？', message: '物件・見積・請求書・テンプレート・会社情報をすべて削除します。先にバックアップ（エクスポート）をおすすめします。', danger: true, confirmLabel: '次へ' });
     if (!ok1) return;
     const ok2 = await ui.confirm({ title: '本当に全部消しますか？', message: 'この操作は元に戻せません。', danger: true, confirmLabel: '🗑 すべて消去' });
     if (!ok2) return;
@@ -981,37 +958,43 @@ function Settings({ state, setState }) {
   };
   const onStampFile = async (e) => {
     const file = e.target.files?.[0]; if (!file) return;
-    if (file.size > 500 * 1024) { await ui.confirm({ title: '画像が大きすぎます', message: '500KB以下の画像を使ってください。', confirmLabel: 'OK' }); e.target.value=''; return; }
-    const reader = new FileReader();
-    reader.onload = ev => setCompany('stampImage', ev.target.result);
-    reader.readAsDataURL(file);
+    if (file.size > 500 * 1024) { await ui.confirm({ title: '画像が大きすぎます', message: '500KB以下の画像を使ってください。', confirmLabel: 'OK' }); e.target.value = ''; return; }
+    const reader = new FileReader(); reader.onload = ev => setCompany('stampImage', ev.target.result); reader.readAsDataURL(file);
   };
-
+  const c = state.companyInfo || {};
   return (
     <div>
       <h1 className="text-2xl font-bold text-navy mb-5">設定</h1>
       <div className="space-y-5 max-w-3xl">
         <div className="bg-white border-2 border-slate-200 rounded-xl p-5">
-          <h2 className="font-bold text-navy mb-3 text-[18px]">会社情報（見積書に表示されます）</h2>
+          <h2 className="font-bold text-navy mb-3 text-[18px]">会社情報（見積書・請求書に表示されます）</h2>
           <div className="grid sm:grid-cols-2 gap-4">
-            <Field label="会社名"><input className={inputCls} value={state.companyInfo?.name || ''} onChange={e => setCompany('name', e.target.value)} placeholder="例）株式会社〇〇工務店" /></Field>
-            <Field label="代表者"><input className={inputCls} value={state.companyInfo?.representative || ''} onChange={e => setCompany('representative', e.target.value)} placeholder="例）佐藤 一郎" /></Field>
-            <Field label="住所"><input className={inputCls} value={state.companyInfo?.address || ''} onChange={e => setCompany('address', e.target.value)} placeholder="例）〇〇県〇〇市…" /></Field>
-            <Field label="電話"><input className={inputCls} inputMode="tel" value={state.companyInfo?.phone || ''} onChange={e => setCompany('phone', e.target.value)} placeholder="例）012-345-6789" /></Field>
-            <Field label="メールアドレス"><input className={inputCls} inputMode="email" value={state.companyInfo?.email || ''} onChange={e => setCompany('email', e.target.value)} placeholder="例）info@example.com" /></Field>
+            <Field label="会社名"><input className={inputCls} value={c.name || ''} onChange={e => setCompany('name', e.target.value)} placeholder="例）株式会社〇〇工務店" /></Field>
+            <Field label="代表者"><input className={inputCls} value={c.representative || ''} onChange={e => setCompany('representative', e.target.value)} placeholder="例）佐藤 一郎" /></Field>
+            <Field label="住所"><input className={inputCls} value={c.address || ''} onChange={e => setCompany('address', e.target.value)} placeholder="例）〇〇県〇〇市…" /></Field>
+            <Field label="電話"><input className={inputCls} inputMode="tel" value={c.phone || ''} onChange={e => setCompany('phone', e.target.value)} placeholder="例）012-345-6789" /></Field>
+            <Field label="メールアドレス"><input className={inputCls} inputMode="email" value={c.email || ''} onChange={e => setCompany('email', e.target.value)} placeholder="例）info@example.com" /></Field>
           </div>
           <div className="mt-4 pt-4 border-t border-slate-200">
-            <h3 className="font-bold text-navy mb-1 text-[16px]">🖋 印鑑画像（任意・正式見積書に自動挿入）</h3>
-            <p className="text-[13px] text-slate-500 mb-2">透過PNG推奨・500KB以下。アップロードすると「③ 正式見積書」の押印欄に表示されます。</p>
+            <h3 className="font-bold text-navy mb-1 text-[16px]">🖋 印鑑画像（任意・正式見積書／請求書に自動挿入）</h3>
+            <p className="text-[13px] text-slate-500 mb-2">透過PNG推奨・500KB以下。</p>
             <div className="flex items-center gap-3 flex-wrap">
-              {state.companyInfo?.stampImage && (
-                <div className="border border-slate-300 rounded p-1 bg-white"><img src={state.companyInfo.stampImage} alt="印鑑" className="h-16 w-16 object-contain" /></div>
-              )}
+              {c.stampImage && <div className="border border-slate-300 rounded p-1 bg-white"><img src={c.stampImage} alt="印鑑" className="h-16 w-16 object-contain" /></div>}
               <input type="file" accept="image/*" onChange={onStampFile} className="text-[14px]" />
-              {state.companyInfo?.stampImage && (
-                <button onClick={() => setCompany('stampImage', '')} className="text-danger underline text-[14px]">画像を削除</button>
-              )}
+              {c.stampImage && <button onClick={() => setCompany('stampImage', '')} className="text-danger underline text-[14px]">画像を削除</button>}
             </div>
+          </div>
+        </div>
+
+        <div className="bg-white border-2 border-slate-200 rounded-xl p-5">
+          <h2 className="font-bold text-navy mb-1 text-[18px]">🏦 振込先（請求書に表示されます）</h2>
+          <p className="text-[13px] text-slate-500 mb-3">請求書の「お振込先」欄に自動で表示されます。</p>
+          <div className="grid sm:grid-cols-2 gap-4">
+            <Field label="銀行名"><input className={inputCls} value={c.bankName || ''} onChange={e => setCompany('bankName', e.target.value)} placeholder="例）〇〇銀行" /></Field>
+            <Field label="支店名"><input className={inputCls} value={c.bankBranch || ''} onChange={e => setCompany('bankBranch', e.target.value)} placeholder="例）〇〇支店" /></Field>
+            <Field label="口座種別"><select className={inputCls} value={c.accountType || '普通'} onChange={e => setCompany('accountType', e.target.value)}><option value="普通">普通</option><option value="当座">当座</option></select></Field>
+            <Field label="口座番号"><input className={inputCls} inputMode="numeric" value={c.accountNumber || ''} onChange={e => setCompany('accountNumber', e.target.value)} placeholder="例）1234567" /></Field>
+            <div className="sm:col-span-2"><Field label="口座名義"><input className={inputCls} value={c.accountHolder || ''} onChange={e => setCompany('accountHolder', e.target.value)} placeholder="例）カ）〇〇コウムテン" /></Field></div>
           </div>
         </div>
 
@@ -1019,29 +1002,18 @@ function Settings({ state, setState }) {
           <div className="bg-white border-2 border-slate-200 rounded-xl p-5">
             <h2 className="font-bold text-navy mb-1 text-[18px]">📤 バックアップ（エクスポート）</h2>
             <p className="text-[13px] text-slate-500 mb-3">端末のキャッシュ消去でデータが消えるのを防ぐため、定期的な保存をおすすめします。</p>
-            <button onClick={exportAll} className="w-full bg-cta hover:bg-ctad text-white font-bold rounded-lg mb-3" style={{ minHeight: '48px' }}>全データを保存（バックアップ）</button>
-            <div className="text-[13px] text-slate-500 mb-2">1件だけ保存:</div>
-            <div className="space-y-1 max-h-40 overflow-y-auto">
-              {state.projects.map(p => (
-                <button key={p.id} onClick={() => exportProject(p.id)} className="block w-full text-left px-3 py-2 border border-slate-200 rounded-lg text-[14px] hover:bg-slate-50 truncate">📄 {p.name || '無題'}</button>
-              ))}
-              {state.projects.length === 0 && <div className="text-[13px] text-slate-400">見積がありません</div>}
-            </div>
+            <button onClick={exportAll} className="w-full bg-cta hover:bg-ctad text-white font-bold rounded-lg" style={{ minHeight: '48px' }}>全データを保存（バックアップ）</button>
           </div>
           <div className="bg-white border-2 border-slate-200 rounded-xl p-5">
             <h2 className="font-bold text-navy mb-1 text-[18px]">📥 読み込み（インポート）</h2>
-            <p className="text-[13px] text-slate-500 mb-3">バックアップしたファイルを読み込みます。</p>
-            <label className="block">
-              <input type="file" accept=".json" onChange={importAll} className="hidden" />
-              <span className="block w-full text-center bg-white border-2 border-navy text-navy font-bold rounded-lg cursor-pointer hover:bg-slate-50" style={{ minHeight: '48px', lineHeight: '48px' }}>ファイルを選ぶ</span>
-            </label>
-            <div className="text-[13px] text-slate-500 mt-3 leading-relaxed">全データ: 既存を上書き<br />1件のみ: 既存に追加（新しい見積として取込）</div>
+            <p className="text-[13px] text-slate-500 mb-3">バックアップしたファイルを読み込みます（全データを上書き）。</p>
+            <label className="block"><input type="file" accept=".json" onChange={importAll} className="hidden" /><span className="block w-full text-center bg-white border-2 border-navy text-navy font-bold rounded-lg cursor-pointer hover:bg-slate-50" style={{ minHeight: '48px', lineHeight: '48px' }}>ファイルを選ぶ</span></label>
           </div>
         </div>
 
         <div className="bg-red-50 border-2 border-red-200 rounded-xl p-5">
           <h2 className="font-bold text-danger mb-2 text-[18px]">⚠️ データ初期化</h2>
-          <p className="text-[14px] text-red-800 mb-3">見積・テンプレート・会社情報をすべて削除します。必ずバックアップしてから実行してください。</p>
+          <p className="text-[14px] text-red-800 mb-3">物件・見積・請求書・テンプレート・会社情報をすべて削除します。必ずバックアップしてから実行してください。</p>
           <a href="#" onClick={e => { e.preventDefault(); resetAll(); }} className="text-danger underline font-bold">すべてのデータを初期化する</a>
         </div>
       </div>
@@ -1049,9 +1021,7 @@ function Settings({ state, setState }) {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(
-  <ModalProvider><App /></ModalProvider>
-);
+ReactDOM.createRoot(document.getElementById('root')).render(<ModalProvider><App /></ModalProvider>);
 </script>
 </body>
 </html>
