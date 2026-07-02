@@ -34,7 +34,7 @@
 <body class="min-h-screen">
 <div id="root"></div>
 
-<script type="text/babel" data-presets="react">
+<script type="text/plain" id="app-source">
 const { useState, useEffect, useMemo, createContext, useContext } = React;
 const LS_KEY = "ha_general_quote_v2";
 const LS_KEY_V1 = "ha_general_quote_v1";
@@ -1022,6 +1022,13 @@ function Settings({ state, setState }) {
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<ModalProvider><App /></ModalProvider>);
+</script>
+<script>
+(function () {
+  var src = document.getElementById('app-source').textContent;
+  var code = Babel.transform(src, { presets: [['react', { runtime: 'classic' }]] }).code;
+  (0, eval)(code);
+})();
 </script>
 </body>
 </html>
